@@ -6,10 +6,10 @@ import Window from './components/Window';
 import { Wifi, Battery, Search, Loader2 } from 'lucide-react';
 import { systemCore } from './services/systemCore';
 import { storage, STORES } from './services/storageService';
-import { authService } from './services/authService'; // <--- NEW IMPORT
-import { User } from 'firebase/auth'; // <--- NEW IMPORT
+import { authService } from './services/authService';
+import { User } from 'firebase/auth';
 
-// --- LAZY LOADED APPS (Code Splitting) ---
+// --- LAZY LOADED APPS ---
 const Calculator = React.lazy(() => import('./apps/Calculator'));
 const AppStore = React.lazy(() => import('./apps/AppStore'));
 const TipsApp = React.lazy(() => import('./apps/TipsApp'));
@@ -47,7 +47,7 @@ const LoadingFallback = () => (
   </div>
 );
 
-// Isolated Status Bar to prevent parent re-renders on clock tick
+// Isolated Status Bar
 const StatusBar = memo(() => {
   const [time, setTime] = useState(new Date());
   useEffect(() => {
@@ -89,6 +89,7 @@ const App: React.FC = () => {
   const [reducedMotion, setReducedMotion] = useState(false);
   const [nightShift, setNightShift] = useState(false);
   const [showFPS, setShowFPS] = useState(false);
+  const [wallpaperDimming, setWallpaperDimming] = useState(false);
   
   // Responsive Layout State
   const [layout, setLayout] = useState({ cols: 4, rows: 5, maxApps: 20, isLandscape: false });
@@ -106,8 +107,6 @@ const App: React.FC = () => {
     const unsubscribe = authService.onUserChange((u) => {
       setUser(u);
       setLoadingAuth(false);
-      
-      // Admin Check
       if (u && authService.isAdmin(u)) {
         console.log("Welcome back, Administrator Johnson.");
       }
@@ -152,7 +151,7 @@ const App: React.FC = () => {
 
   // --- NEURAL BACKEND INITIALIZATION & LISTENERS ---
   useEffect(() => {
-    if (!user) return; // Only init system core if logged in
+    if (!user) return; 
 
     systemCore.init().catch(console.error);
     
@@ -181,6 +180,7 @@ const App: React.FC = () => {
             setReducedMotion(savedSettings.reducedMotion || false);
             setNightShift(savedSettings.nightShift || false);
             setShowFPS(savedSettings.showFPS || false);
+            setWallpaperDimming(savedSettings.wallpaperDimming || false);
             
             document.documentElement.style.setProperty('--text-scale', savedSettings.textSize?.toString() || '1');
             if (savedSettings.boldText) document.body.classList.add('font-bold');
@@ -199,6 +199,7 @@ const App: React.FC = () => {
         if (s.reducedMotion !== undefined) setReducedMotion(s.reducedMotion);
         if (s.nightShift !== undefined) setNightShift(s.nightShift);
         if (s.showFPS !== undefined) setShowFPS(s.showFPS);
+        if (s.wallpaperDimming !== undefined) setWallpaperDimming(s.wallpaperDimming);
         if (s.textSize !== undefined) document.documentElement.style.setProperty('--text-scale', s.textSize.toString());
         if (s.boldText !== undefined) {
              if (s.boldText) document.body.classList.add('font-bold');
@@ -307,7 +308,6 @@ const App: React.FC = () => {
   };
 
   const renderAppContent = (id: AppID) => {
-    // Suspense Wrapper ensures lazy loading
     return (
       <Suspense fallback={<LoadingFallback />}>
         {(() => {
@@ -315,7 +315,17 @@ const App: React.FC = () => {
             case AppID.CALCULATOR: return <Calculator />;
             case AppID.STORE: return <AppStore installedApps={installedApps} onInstall={handleInstall} />;
             case AppID.TIPS: return <TipsApp />;
-            case AppID.SETTINGS: return <SettingsApp currentWallpaperId={wallpaperId} onWallpaperChange={setWallpaperId} />;
+            
+            // --- UPDATED SETTINGS CALL ---
+            case AppID.SETTINGS: return (
+                <SettingsApp 
+                    currentWallpaperId={wallpaperId} 
+                    onWallpaperChange={setWallpaperId}
+                    installedApps={installedApps}
+                    onUninstall={handleUninstall} 
+                />
+            );
+            
             case AppID.DRAMA: return <DramaTracker onNavigate={(toId: AppID) => navigateToApp(AppID.DRAMA, toId)} />;
             case AppID.SELL_IT: return <JustSellIt />;
             case AppID.LYRICS_AI: return <LyricsAI />;
@@ -409,13 +419,11 @@ const App: React.FC = () => {
           <div className="absolute inset-0 bg-orange-500/20 pointer-events-none z-[9999] mix-blend-multiply" />
       )}
       
-      {/* 2. Dimming */}
-      {dimLevel > 0 && (
-          <div 
-            className="absolute inset-0 bg-black pointer-events-none transition-opacity duration-300 z-0"
-            style={{ opacity: dimLevel / 100 }} 
-          />
-      )}
+      {/* 2. Dimming & Wallpaper Dimming */}
+      <div 
+        className="absolute inset-0 bg-black pointer-events-none transition-opacity duration-300 z-0"
+        style={{ opacity: (dimLevel / 100) + (wallpaperDimming ? 0.3 : 0) }} 
+      />
 
       {/* 3. FPS Counter */}
       {showFPS && (
