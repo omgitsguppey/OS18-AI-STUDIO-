@@ -9,7 +9,7 @@ import { storage, STORES } from '../services/storageService';
 import { authService } from '../services/authService';
 import { User } from 'firebase/auth';
 
-// --- LAZY LOADED APPS (Sibling Imports) ---
+// --- LAZY LOADED APPS ---
 const Calculator = React.lazy(() => import('./Calculator'));
 const AppStore = React.lazy(() => import('./AppStore'));
 const TipsApp = React.lazy(() => import('./TipsApp'));
@@ -91,8 +91,8 @@ const App: React.FC = () => {
   const [showFPS, setShowFPS] = useState(false);
   const [wallpaperDimming, setWallpaperDimming] = useState(false);
   
-  // Responsive Layout State
-  const [layout, setLayout] = useState({ cols: 4, rows: 5, maxApps: 20, isLandscape: false });
+  // Layout State (Defaults to 4x6)
+  const [layout, setLayout] = useState({ cols: 4, rows: 6, maxApps: 24, isLandscape: false });
 
   // FPS Counter
   const fpsRef = useRef(0);
@@ -107,34 +107,20 @@ const App: React.FC = () => {
     const unsubscribe = authService.onUserChange((u) => {
       setUser(u);
       setLoadingAuth(false);
-      if (u && authService.isAdmin(u)) {
-        console.log("Welcome back, Administrator Johnson.");
-      }
     });
     return () => unsubscribe();
   }, []);
 
-  // --- LAYOUT & SYSTEM INIT ---
+  // --- FORCE LAYOUT ---
   useEffect(() => {
     const calculateLayout = () => {
         const width = window.innerWidth;
         const height = window.innerHeight;
         const isLandscape = width > height;
 
-        const TOP_RESERVE = 60;
-        const BOTTOM_RESERVE = isLandscape && height < 500 ? 140 : 200; 
-
-        const availableW = width - 40; 
-        const availableH = height - TOP_RESERVE - BOTTOM_RESERVE;
-
-        const SLOT_W = 90; 
-        const SLOT_H = 105;
-
-        let cols = Math.floor(availableW / SLOT_W);
-        let rows = Math.floor(availableH / SLOT_H);
-
-        cols = Math.max(3, Math.min(cols, 12)); 
-        rows = Math.max(1, Math.min(rows, 8));
+        // Strict Geometry: 4x6 Portrait, 6x3 Landscape
+        const cols = isLandscape ? 6 : 4;
+        const rows = isLandscape ? 3 : 6; 
 
         setLayout({
             cols,
@@ -149,28 +135,12 @@ const App: React.FC = () => {
     return () => window.removeEventListener('resize', calculateLayout);
   }, []);
 
-  // --- NEURAL BACKEND INITIALIZATION & LISTENERS ---
+  // --- NEURAL BACKEND ---
   useEffect(() => {
     if (!user) return; 
-
     systemCore.init().catch(console.error);
     
-    const handleGlobalClick = (e: MouseEvent) => {
-        const target = e.target as HTMLElement;
-        const label = target.innerText || target.getAttribute('aria-label') || target.tagName;
-        if (!target.closest('.font-mono')) {
-            systemCore.trackRawEvent('click', label.substring(0, 30));
-        }
-    };
-
-    const handleGlobalKey = (e: KeyboardEvent) => {
-        systemCore.trackRawEvent('keypress', 'Input Activity');
-    };
-
-    window.addEventListener('click', handleGlobalClick);
-    window.addEventListener('keydown', handleGlobalKey);
-    
-    // Initial Settings Load
+    // Load Settings
     const loadSettings = async () => {
         const savedSettings = await storage.get<any>(STORES.SYSTEM, 'user_settings');
         const savedWp = await storage.get<string>(STORES.SYSTEM, 'wallpaper_id');
@@ -193,6 +163,7 @@ const App: React.FC = () => {
     };
     loadSettings();
 
+    // Listeners
     const handleSettingsUpdate = (e: Event) => {
         const s = (e as CustomEvent).detail;
         if (s.dimLevel !== undefined) setDimLevel(s.dimLevel);
@@ -205,20 +176,9 @@ const App: React.FC = () => {
              if (s.boldText) document.body.classList.add('font-bold');
              else document.body.classList.remove('font-bold');
         }
-        if (s.debugBorders !== undefined) {
-            if (s.debugBorders) document.body.classList.add('debug-borders');
-            else document.body.classList.remove('debug-borders');
-        }
     };
     window.addEventListener('sys_settings_update', handleSettingsUpdate);
-    window.addEventListener('system_settings_change', handleSettingsUpdate);
-
-    return () => {
-        window.removeEventListener('click', handleGlobalClick);
-        window.removeEventListener('keydown', handleGlobalKey);
-        window.removeEventListener('sys_settings_update', handleSettingsUpdate);
-        window.removeEventListener('system_settings_change', handleSettingsUpdate);
-    };
+    return () => window.removeEventListener('sys_settings_update', handleSettingsUpdate);
   }, [user]);
 
   // FPS Loop
@@ -240,20 +200,12 @@ const App: React.FC = () => {
       return () => cancelAnimationFrame(frameId);
   }, [showFPS]);
 
-  // Track app session duration
+  // Track app session
   useEffect(() => {
     if (activeApp) {
         activeAppStartTimeRef.current = Date.now();
         systemCore.trackInteraction(activeApp, 'open');
     }
-    return () => {
-        if (activeApp && activeAppStartTimeRef.current > 0) {
-            const duration = (Date.now() - activeAppStartTimeRef.current) / 1000;
-            if (duration > 1) {
-                systemCore.trackInteraction(activeApp, 'dwell', { durationSeconds: duration });
-            }
-        }
-    };
   }, [activeApp]);
 
   const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
@@ -360,7 +312,7 @@ const App: React.FC = () => {
 
   const pages = useMemo(() => {
     const p = [];
-    const limit = layout.maxApps || 1;
+    const limit = layout.maxApps;
     for (let i = 0; i < installedApps.length; i += limit) {
         p.push(installedApps.slice(i, i + limit));
     }
@@ -371,69 +323,36 @@ const App: React.FC = () => {
   const currentWallpaper = WALLPAPERS.find(w => w.id === wallpaperId) || WALLPAPERS[0];
   const filteredApps = (Object.values(ALL_APPS) as AppConfig[]).filter(app => installedApps.includes(app.id) && (app.name.toLowerCase().includes(searchQuery.toLowerCase()) || app.description.toLowerCase().includes(searchQuery.toLowerCase()))).sort((a, b) => a.name.localeCompare(b.name));
 
-  // --- LOGIN SCREEN RENDER ---
-  if (loadingAuth) {
-    return <div className="bg-black h-screen w-screen flex items-center justify-center text-white"><Loader2 className="animate-spin" /></div>;
-  }
+  // --- LOGIN SCREEN ---
+  if (loadingAuth) return <div className="bg-black h-screen w-screen flex items-center justify-center text-white"><Loader2 className="animate-spin" /></div>;
 
   if (!user) {
     return (
       <div className="h-screen w-screen bg-black flex flex-col items-center justify-center text-white space-y-8 relative overflow-hidden">
-        {/* Background Ambient */}
         <div className="absolute inset-0 bg-gradient-to-tr from-blue-900/20 via-purple-900/20 to-black pointer-events-none" />
-        
         <div className="z-10 text-center space-y-2">
             <h1 className="text-6xl font-bold tracking-tighter bg-gradient-to-r from-blue-400 to-purple-400 bg-clip-text text-transparent">OS 18</h1>
             <p className="text-white/50 text-sm tracking-widest uppercase">Web Experience</p>
         </div>
-
-        <button 
-            onClick={() => authService.login()}
-            className="z-10 flex items-center gap-3 px-8 py-4 bg-white text-black rounded-full font-bold hover:scale-105 active:scale-95 transition-all shadow-xl shadow-white/10"
-        >
-            {/* Google G Icon */}
-            <svg viewBox="0 0 24 24" className="w-5 h-5" xmlns="http://www.w3.org/2000/svg">
-              <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
-              <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
-              <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/>
-              <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
-            </svg>
+        <button onClick={() => authService.login()} className="z-10 flex items-center gap-3 px-8 py-4 bg-white text-black rounded-full font-bold hover:scale-105 active:scale-95 transition-all shadow-xl shadow-white/10">
+            <svg viewBox="0 0 24 24" className="w-5 h-5" xmlns="http://www.w3.org/2000/svg"><path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/><path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/><path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/><path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/></svg>
             Sign in with Google
         </button>
-
-        <p className="absolute bottom-10 text-xs text-white/20">Authorized Personnel Only</p>
       </div>
     );
   }
 
   // --- MAIN OS RENDER ---
   return (
-    <div 
-      className="relative w-screen h-[100dvh] overflow-hidden text-white font-sans selection:bg-blue-500/30 transition-all duration-700 ease-in-out" 
-      style={currentWallpaper.style}
-    >
-      {/* GLOBAL OVERLAYS */}
-      {/* 1. Night Shift (Warm Overlay) */}
-      {nightShift && (
-          <div className="absolute inset-0 bg-orange-500/20 pointer-events-none z-[9999] mix-blend-multiply" />
-      )}
-      
-      {/* 2. Dimming & Wallpaper Dimming */}
-      <div 
-        className="absolute inset-0 bg-black pointer-events-none transition-opacity duration-300 z-0"
-        style={{ opacity: (dimLevel / 100) + (wallpaperDimming ? 0.3 : 0) }} 
-      />
-
-      {/* 3. FPS Counter */}
-      {showFPS && (
-          <div id="fps-counter" className="absolute top-12 left-6 z-[9999] bg-black/50 text-green-400 font-mono text-xs px-2 py-1 rounded border border-green-500/30 pointer-events-none">
-              -- FPS
-          </div>
-      )}
+    <div className="relative w-screen h-[100dvh] overflow-hidden text-white font-sans selection:bg-blue-500/30 transition-all duration-700 ease-in-out" style={currentWallpaper.style}>
+      {/* Overlays */}
+      {nightShift && <div className="absolute inset-0 bg-orange-500/20 pointer-events-none z-[9999] mix-blend-multiply" />}
+      <div className="absolute inset-0 bg-black pointer-events-none transition-opacity duration-300 z-0" style={{ opacity: (dimLevel / 100) + (wallpaperDimming ? 0.3 : 0) }} />
+      {showFPS && <div id="fps-counter" className="absolute top-12 left-6 z-[9999] bg-black/50 text-green-400 font-mono text-xs px-2 py-1 rounded border border-green-500/30 pointer-events-none">-- FPS</div>}
 
       <StatusBar />
 
-      {/* Spotlight */}
+      {/* Spotlight Search Overlay */}
       {isSearchOpen && (
         <div className="fixed inset-0 z-[60] bg-black/40 backdrop-blur-2xl flex flex-col pt-24 px-6 animate-fade-in" onClick={() => setIsSearchOpen(false)}>
             <div className="w-full max-w-lg mx-auto flex flex-col h-[80vh]" onClick={e => e.stopPropagation()}>
@@ -453,7 +372,7 @@ const App: React.FC = () => {
         </div>
       )}
 
-      {/* App Grid - Auto Correcting */}
+      {/* --- APP GRID (FORCED 4x6 LAYOUT) --- */}
       <div 
         ref={scrollRef} 
         onScroll={handleScroll} 
@@ -462,50 +381,49 @@ const App: React.FC = () => {
         style={{ scrollbarWidth: 'none' }}
       >
         {pages.map((pageApps, pageIdx) => (
-          <div 
-            key={pageIdx} 
-            className="min-w-full h-full snap-start flex flex-col items-center pt-[calc(3rem+env(safe-area-inset-top))] pb-[calc(8rem+env(safe-area-inset-bottom))]"
-          >
-            {/* Dynamic Grid Container */}
-            <div 
-                className="w-full max-w-[90vw] h-full grid justify-items-center content-start gap-4 transition-all duration-500 ease-out"
-                style={{ 
+          <div key={pageIdx} className="min-w-full h-full snap-start relative">
+             {/* GRID CONTAINER: Absolute Anchoring (Top 24, Bottom 40) */}
+             <div 
+                className="absolute left-1/2 -translate-x-1/2 top-24 bottom-40 w-[90vw] grid gap-x-4 gap-y-1 justify-items-center items-center"
+                style={{
                     gridTemplateColumns: `repeat(${layout.cols}, minmax(0, 1fr))`,
-                    gridTemplateRows: `repeat(${layout.rows}, minmax(0, 1fr))`,
-                    paddingTop: '20px' 
+                    gridTemplateRows: `repeat(${layout.rows}, minmax(0, 1fr))`
                 }}
-            >
-              {pageApps.map(appId => (
-                <AppIcon key={appId} app={ALL_APPS[appId]} onClick={(e) => { e.stopPropagation(); launchApp(appId); }} isEditMode={isEditMode} canRemove={!ALL_APPS[appId].isSystem} onRemove={() => handleUninstall(appId)} />
-              ))}
-            </div>
+             >
+                {pageApps.map(appId => (
+                    <AppIcon 
+                        key={appId} 
+                        app={ALL_APPS[appId]} 
+                        onClick={(e) => { e.stopPropagation(); launchApp(appId); }} 
+                        isEditMode={isEditMode} 
+                        canRemove={!ALL_APPS[appId].isSystem} 
+                        onRemove={() => handleUninstall(appId)} 
+                    />
+                ))}
+             </div>
           </div>
         ))}
       </div>
 
-      {/* Indicators */}
+      {/* Pagination Dots - Lowered Position (Above Search) */}
       {pages.length > 1 && (
-        <div className="absolute bottom-[calc(9.5rem+env(safe-area-inset-bottom))] left-0 right-0 flex justify-center gap-2 z-40 pointer-events-none transition-all duration-300">
+        <div className="absolute bottom-36 left-0 right-0 flex justify-center gap-2 z-40 pointer-events-none transition-all duration-300">
             {pages.map((_, i) => <div key={i} className={`w-2 h-2 rounded-full transition-all duration-300 ${currentPage === i ? 'bg-white scale-110 shadow-sm' : 'bg-white/30'}`} />)}
         </div>
       )}
 
-      {/* Search Pill */}
-      <div className="absolute bottom-[calc(7.5rem+env(safe-area-inset-bottom))] left-0 right-0 flex justify-center z-40 pointer-events-none">
+      {/* Search Pill - Lowered Position (Above Dock) */}
+      <div className="absolute bottom-24 left-0 right-0 flex justify-center z-40 pointer-events-none">
         <button onClick={() => setIsSearchOpen(true)} className="pointer-events-auto bg-white/10 hover:bg-white/20 backdrop-blur-xl border border-white/5 px-5 py-2 rounded-full flex items-center gap-2 transition-all active:scale-95 group shadow-lg shadow-black/20">
             <Search size={14} className="text-white/70 group-hover:text-white" /><span className="text-xs font-medium text-white/70 group-hover:text-white">Search</span>
         </button>
       </div>
 
-      {/* Edit Mode */}
-      {isEditMode && <div className="absolute bottom-[calc(11rem+env(safe-area-inset-bottom))] left-0 right-0 text-center pointer-events-none animate-fade-in z-40"><span className="bg-black/40 backdrop-blur-md px-4 py-1.5 rounded-full text-xs font-bold text-white/90 border border-white/10 shadow-lg">Triple-click space to finish editing</span></div>}
+      {isEditMode && <div className="absolute bottom-[11rem] left-0 right-0 text-center pointer-events-none animate-fade-in z-40"><span className="bg-black/40 backdrop-blur-md px-4 py-1.5 rounded-full text-xs font-bold text-white/90 border border-white/10 shadow-lg">Triple-click space to finish editing</span></div>}
 
-      {/* Fixed Dock - Bumped Z-Index to 50 */}
-      <div className="absolute bottom-[calc(1.5rem+env(safe-area-inset-bottom))] left-1/2 -translate-x-1/2 z-50 transition-all duration-300 w-auto max-w-[95vw]">
-        <div 
-            className="flex items-center gap-2 sm:gap-4 px-3 sm:px-5 py-3 sm:py-4 bg-white/10 backdrop-blur-3xl border border-white/20 rounded-[2rem] sm:rounded-[2.5rem] shadow-2xl shadow-black/60 transition-all duration-500 hover:scale-[1.02] hover:bg-white/15"
-            style={{ transform: layout.isLandscape && window.innerHeight < 500 ? 'scale(0.8) translateY(10px)' : 'scale(1)' }}
-        >
+      {/* Dock */}
+      <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-50 transition-all duration-300 w-auto max-w-[95vw]">
+        <div className="flex items-center gap-2 sm:gap-4 px-3 sm:px-5 py-3 sm:py-4 bg-white/10 backdrop-blur-3xl border border-white/20 rounded-[2rem] sm:rounded-[2.5rem] shadow-2xl shadow-black/60 hover:scale-[1.02] hover:bg-white/15">
           {[AppID.DRAMA, AppID.SELL_IT, AppID.LYRICS_AI, AppID.CAPTIONS].map(id => (
              <div key={id} className="relative group shrink-0">
                  <AppIcon app={ALL_APPS[id]} size={layout.cols < 4 ? "sm" : "md"} showLabel={false} onClick={() => launchApp(id)} isEditMode={isEditMode} canRemove={false} />
@@ -515,13 +433,9 @@ const App: React.FC = () => {
         </div>
       </div>
 
-      {/* Windows Layer - With Reduced Motion Logic */}
+      {/* Windows */}
       {openApps.map(appId => (
-        <div 
-            key={appId} 
-            className={reducedMotion ? "motion-reduce" : ""}
-            style={reducedMotion ? { transition: 'none' } : {}}
-        >
+        <div key={appId} className={reducedMotion ? "motion-reduce" : ""} style={reducedMotion ? { transition: 'none' } : {}}>
             <Window app={ALL_APPS[appId]} isOpen={true} isActive={activeApp === appId} onClose={() => closeApp(appId)} onFocus={() => bringToFront(appId)} zIndex={zIndices[appId] || 10}>
             {renderAppContent(appId)}
             </Window>
@@ -532,17 +446,8 @@ const App: React.FC = () => {
         .no-scrollbar::-webkit-scrollbar { display: none; } 
         .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; } 
         .motion-reduce * { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; scroll-behavior: auto !important; }
-        
-        /* Dynamic Font Scaling */
-        :root {
-            font-size: calc(16px * var(--text-scale, 1));
-            --app-safe-lift: 15px; /* Global Safe Area Lift */
-        }
-        
-        /* Debug Borders */
-        .debug-borders * {
-            outline: 1px solid rgba(255, 0, 0, 0.3) !important;
-        }
+        :root { font-size: calc(16px * var(--text-scale, 1)); }
+        .debug-borders * { outline: 1px solid rgba(255, 0, 0, 0.3) !important; }
       `}</style>
     </div>
   );
