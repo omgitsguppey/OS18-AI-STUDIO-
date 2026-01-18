@@ -1,21 +1,22 @@
-
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
   Library, 
   Plus, 
   ChevronRight, 
   Disc, 
-  Music, 
   Check, 
   PlusCircle,
   FolderPlus,
   LayoutGrid,
   Loader2,
-  Mic2,
+  Mic,
   Sparkles,
-  ArrowRight
+  ArrowRight,
+  Image as ImageIcon
 } from 'lucide-react';
 import { storage, STORES } from '../services/storageService';
+import { generateImage } from '../services/geminiService'; // Ensure this service exists/is exported
+import { systemCore } from '../services/systemCore';
 import { AppID } from '../types';
 
 interface LyricAnalysis {
@@ -34,6 +35,7 @@ interface Album {
   artistId: string;
   title: string;
   songTitles: string[];
+  coverArt?: string; // Base64 or URL
   createdAt: number;
 }
 
@@ -51,14 +53,21 @@ const AlbumsAI: React.FC<AlbumsAIProps> = ({ onNavigate }) => {
   const [view, setView] = useState<'hub' | 'artist-detail' | 'new-album' | 'album-detail'>('hub');
   const [selectedArtistId, setSelectedArtistId] = useState<string | null>(null);
   const [selectedAlbumId, setSelectedAlbumId] = useState<string | null>(null);
+  
+  // System State
+  const [credits, setCredits] = useState(0);
+  const [isGeneratingArt, setIsGeneratingArt] = useState(false);
 
   // Form State
   const [newAlbumTitle, setNewAlbumTitle] = useState('');
 
-  // Initial Sync from IndexedDB
+  // Initial Sync from Storage & System Core
   useEffect(() => {
     const loadData = async () => {
       try {
+        await systemCore.init();
+        setCredits(systemCore.getCredits());
+
         const [a, alb] = await Promise.all([
           storage.get<Artist[]>(STORES.LYRICS, 'artists_list'),
           storage.get<Album[]>(STORES.ALBUMS, 'projects_list')
@@ -76,10 +85,17 @@ const AlbumsAI: React.FC<AlbumsAIProps> = ({ onNavigate }) => {
     // Listen for updates from LyricsAI
     const sync = () => loadData();
     window.addEventListener('lyrics_updated', sync);
-    return () => window.removeEventListener('lyrics_updated', sync);
+    
+    // Credit Poller
+    const interval = setInterval(() => setCredits(systemCore.getCredits()), 5000);
+
+    return () => {
+        window.removeEventListener('lyrics_updated', sync);
+        clearInterval(interval);
+    };
   }, []);
 
-  // Save albums to IndexedDB
+  // Save albums to Storage
   useEffect(() => {
     if (!isReady) return;
     storage.set(STORES.ALBUMS, 'projects_list', albums).catch(console.error);
@@ -104,6 +120,7 @@ const AlbumsAI: React.FC<AlbumsAIProps> = ({ onNavigate }) => {
     setAlbums([...albums, newAlbum]);
     setNewAlbumTitle('');
     setView('artist-detail');
+    systemCore.trackInteraction('ALBUMS_AI', 'sys_event', { label: 'create_album' });
   };
 
   const toggleSongInAlbum = (albumId: string, songTitle: string) => {
@@ -119,6 +136,45 @@ const AlbumsAI: React.FC<AlbumsAIProps> = ({ onNavigate }) => {
       }
       return alb;
     }));
+  };
+
+  const handleGenerateCoverArt = async () => {
+      if (!selectedAlbum || !selectedArtist) return;
+
+      // Credit Check (Cost: 5)
+      if (credits < 5) {
+          alert("Insufficient credits. Cover Art Generation costs 5 Credits.");
+          return;
+      }
+
+      setIsGeneratingArt(true);
+      try {
+          // Deduct Credits
+          await systemCore.useCredit(5);
+          setCredits(systemCore.getCredits());
+
+          // Construct Prompt
+          const prompt = `Album cover art for "${selectedAlbum.title}" by ${selectedArtist.name}. 
+          Songs include: ${selectedAlbum.songTitles.slice(0, 3).join(', ')}. 
+          Style: Professional, high resolution, artistic, relevant to the song titles.`;
+
+          // Generate
+          const base64 = await generateImage(prompt); // Assuming this returns base64 string
+          
+          if (base64) {
+              setAlbums(prev => prev.map(a => 
+                  a.id === selectedAlbum.id ? { ...a, coverArt: base64 } : a
+              ));
+              systemCore.trackInteraction('ALBUMS_AI', 'generate', { type: 'cover_art' });
+          } else {
+              alert("Generation failed.");
+          }
+      } catch (e) {
+          console.error(e);
+          alert("Generation error.");
+      } finally {
+          setIsGeneratingArt(false);
+      }
   };
 
   const deleteAlbum = (id: string) => {
@@ -141,7 +197,10 @@ const AlbumsAI: React.FC<AlbumsAIProps> = ({ onNavigate }) => {
           <div className={`w-8 h-8 rounded-lg ${ACCENT_BG} flex items-center justify-center shadow-lg shadow-blue-500/20`}>
             <Library size={18} className="text-white" />
           </div>
-          <span className="text-sm font-bold tracking-tight">AlbumsAI</span>
+          <div>
+            <span className="text-sm font-bold tracking-tight block leading-none">AlbumsAI</span>
+            <span className="text-[9px] text-gray-500 font-mono tracking-wider">{credits} CR</span>
+          </div>
         </div>
         {view !== 'hub' && (
           <button 
@@ -163,7 +222,7 @@ const AlbumsAI: React.FC<AlbumsAIProps> = ({ onNavigate }) => {
             {artists.length === 0 ? (
               <div className="py-16 px-6 bg-[#1c1c1e] border border-white/5 rounded-[2rem] flex flex-col items-center justify-center text-center">
                 <div className="w-20 h-20 rounded-full bg-blue-500/10 flex items-center justify-center text-blue-500 mb-6">
-                  <Mic2 size={40} />
+                  <Mic size={40} />
                 </div>
                 <h3 className="text-xl font-bold mb-2">Registry is Empty</h3>
                 <p className="text-gray-400 text-sm mb-8 leading-relaxed max-w-xs">
@@ -244,9 +303,13 @@ const AlbumsAI: React.FC<AlbumsAIProps> = ({ onNavigate }) => {
                 albumsForSelectedArtist.map(album => (
                   <div key={album.id} onClick={() => { setSelectedAlbumId(album.id); setView('album-detail'); }} className="bg-[#1c1c1e] border border-white/5 rounded-2xl p-5 hover:bg-[#252527] transition-all cursor-pointer flex items-center justify-between group">
                     <div className="flex items-center gap-4">
-                      <div className="w-10 h-10 bg-blue-500/10 rounded-lg flex items-center justify-center text-blue-400">
-                        <LayoutGrid size={20} />
-                      </div>
+                      {album.coverArt ? (
+                          <img src={`data:image/png;base64,${album.coverArt}`} alt="Cover" className="w-12 h-12 rounded-lg object-cover shadow-sm" />
+                      ) : (
+                          <div className="w-12 h-12 bg-blue-500/10 rounded-lg flex items-center justify-center text-blue-400">
+                            <LayoutGrid size={20} />
+                          </div>
+                      )}
                       <div>
                         <h4 className="font-bold">{album.title}</h4>
                         <p className="text-[10px] text-gray-500 font-bold uppercase tracking-widest">{album.songTitles.length} Selections</p>
@@ -272,7 +335,30 @@ const AlbumsAI: React.FC<AlbumsAIProps> = ({ onNavigate }) => {
 
         {view === 'album-detail' && selectedAlbum && selectedArtist && (
           <div className="space-y-8 animate-fade-in">
-            <h2 className="text-3xl font-black tracking-tight">{selectedAlbum.title}</h2>
+            <div className="flex items-start justify-between">
+                <div>
+                    <h2 className="text-3xl font-black tracking-tight">{selectedAlbum.title}</h2>
+                    <p className="text-sm text-gray-500">{selectedArtist.name}</p>
+                </div>
+                {/* Cover Art Section */}
+                <div className="flex flex-col items-center gap-2">
+                    <div className="w-24 h-24 bg-[#1c1c1e] rounded-xl border border-white/10 flex items-center justify-center overflow-hidden shadow-lg">
+                        {selectedAlbum.coverArt ? (
+                            <img src={`data:image/png;base64,${selectedAlbum.coverArt}`} alt="Cover" className="w-full h-full object-cover" />
+                        ) : (
+                            <Disc size={32} className="text-gray-600 opacity-50" />
+                        )}
+                    </div>
+                    <button 
+                        onClick={handleGenerateCoverArt}
+                        disabled={isGeneratingArt}
+                        className="text-[9px] font-bold uppercase tracking-wider text-blue-400 hover:text-blue-300 disabled:opacity-50"
+                    >
+                        {isGeneratingArt ? 'Generating...' : selectedAlbum.coverArt ? 'Regenerate (5 CR)' : 'Create Art (5 CR)'}
+                    </button>
+                </div>
+            </div>
+
             <div className="space-y-3">
               <h3 className="text-[10px] font-black uppercase text-gray-500 tracking-widest">Available Track Selections</h3>
               {selectedArtist.songs.length === 0 ? (

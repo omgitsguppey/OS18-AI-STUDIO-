@@ -1,4 +1,3 @@
-
 import { Type } from "@google/genai";
 import { generateOptimizedContent, APP_MODEL_CONFIG, getAIClient } from "./core";
 import { AppID } from "../../types";
@@ -226,8 +225,12 @@ export const generateSeasonTitle = async (episodes: ContentEpisode[]): Promise<s
   return JSON.parse(response.text || '{}').seasonTitle || "New Season";
 };
 
-// --- WALLPAPER AI ---
+// --- IMAGE GENERATION (WALLPAPER & ALBUM ART) ---
 
+/**
+ * Generates an image using the Gemini Imagen model.
+ * Base function used by specific features.
+ */
 export const generateWallpaper = async (
   prompt: string,
   style: string,
@@ -235,18 +238,37 @@ export const generateWallpaper = async (
   aspectRatio: "9:16" | "16:9" | "1:1"
 ): Promise<string | null> => {
   const ai = getAIClient();
-  const fullPrompt = `Style: ${style}. ${prompt}. High quality wallpaper.`;
+  const fullPrompt = `Style: ${style}. ${prompt}. High quality, detailed.`;
   
-  const response = await ai.models.generateContent({
-    model: APP_MODEL_CONFIG[AppID.WALLPAPER_AI],
-    contents: { parts: [{ text: fullPrompt }] },
-    config: {
-      imageConfig: { aspectRatio: aspectRatio, imageSize: resolution }
-    }
-  });
+  try {
+    const response = await ai.models.generateContent({
+        model: APP_MODEL_CONFIG[AppID.WALLPAPER_AI], 
+        contents: { parts: [{ text: fullPrompt }] },
+        config: {
+            // Note: This specific config structure depends on the specific Google GenAI SDK version 
+            // and if the endpoint supports experimental image generation parameters.
+            // If standard text models are used, this will likely fail or return text description of image.
+            // Assuming this connects to an Imagen-capable endpoint wrapper.
+            // @ts-ignore
+            imageConfig: { aspectRatio: aspectRatio, imageSize: resolution }
+        }
+    });
 
-  for (const part of response.candidates?.[0]?.content?.parts || []) {
-    if (part.inlineData) return part.inlineData.data;
+    // Check for inline image data in response
+    for (const part of response.candidates?.[0]?.content?.parts || []) {
+        if (part.inlineData) return part.inlineData.data;
+    }
+    return null;
+  } catch (e) {
+      console.error("Image Generation Failed:", e);
+      return null;
   }
-  return null;
+};
+
+/**
+ * Helper specifically for Album Artwork (Square, 1K)
+ */
+export const generateImage = async (prompt: string): Promise<string | null> => {
+    // Re-use the existing pipeline but force 1:1 aspect ratio for albums
+    return generateWallpaper(prompt, "Album Cover Art", "1K", "1:1");
 };

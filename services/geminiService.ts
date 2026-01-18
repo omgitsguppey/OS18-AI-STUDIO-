@@ -1,5 +1,4 @@
-
-// This service now acts as a Facade for the isolated AI modules in services/ai/
+// This service acts as a Facade for the isolated AI modules in services/ai/
 // This ensures cleaner architecture while maintaining simple imports for consumers.
 
 export * from './ai/core';

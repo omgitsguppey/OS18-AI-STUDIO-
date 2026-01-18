@@ -1,9 +1,8 @@
-
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
-  Music4, 
+  Music, 
   Plus, 
-  Mic2, 
+  Mic, 
   ChevronRight, 
   ChevronDown,
   History as HistoryIcon, 
@@ -15,23 +14,22 @@ import {
   Brain,
   Hash,
   Waves,
-  ListMusic,
   ArrowLeft,
   ArrowRight,
   Search,
   ChevronLeft,
-  FileText,
-  User
+  FileText
 } from 'lucide-react';
 import { analyzeLyrics, generateArtistProfile, LyricAnalysis, ArtistProfileAnalysis } from '../services/geminiService';
 import { storage, STORES } from '../services/storageService';
+import { systemCore } from '../services/systemCore';
 
 interface Artist {
   id: string;
   name: string;
   genre: string;
   songs: LyricAnalysis[];
-  profileAnalysis?: ArtistProfileAnalysis; // Cached profile
+  profileAnalysis?: ArtistProfileAnalysis; 
   createdAt: number;
 }
 
@@ -45,13 +43,16 @@ const LyricsAI: React.FC = () => {
   const [isReady, setIsReady] = useState(false);
   const [view, setView] = useState<'hub' | 'artist' | 'new-artist' | 'new-song' | 'song-detail'>('hub');
   
+  // System State
+  const [credits, setCredits] = useState(0);
+
   // Navigation State
   const [selectedArtistId, setSelectedArtistId] = useState<string | null>(null);
   const [selectedSongIdx, setSelectedSongIdx] = useState<number | null>(null);
   const [artistTab, setArtistTab] = useState<'songs' | 'profile'>('songs');
   
   // Analysis State
-  const [expandedSection, setExpandedSection] = useState<string | null>(null); // For accordion in song detail
+  const [expandedSection, setExpandedSection] = useState<string | null>(null); 
   const [songDetailTab, setSongDetailTab] = useState<'analysis' | 'lyrics'>('analysis');
   const [isLoading, setIsLoading] = useState(false);
   const [isGeneratingProfile, setIsGeneratingProfile] = useState(false);
@@ -66,10 +67,13 @@ const LyricsAI: React.FC = () => {
   const [newSongTitle, setNewSongTitle] = useState('');
   const [newSongLyrics, setNewSongLyrics] = useState('');
 
-  // 1. Initial Load
+  // 1. Initial Load & System Core
   useEffect(() => {
     const loadData = async () => {
       try {
+        await systemCore.init();
+        setCredits(systemCore.getCredits());
+
         const saved = await storage.get<Artist[]>(STORES.LYRICS, 'artists_list');
         if (saved) {
           setArtists(saved);
@@ -81,6 +85,10 @@ const LyricsAI: React.FC = () => {
       }
     };
     loadData();
+
+    // Credit Poller
+    const interval = setInterval(() => setCredits(systemCore.getCredits()), 5000);
+    return () => clearInterval(interval);
   }, []);
 
   // 2. Persist
@@ -156,13 +164,25 @@ const LyricsAI: React.FC = () => {
     setNewArtistName('');
     setNewArtistGenre('');
     setView('hub');
+    systemCore.trackInteraction('LYRICS_AI', 'sys_event', { label: 'create_artist' });
   };
 
   const handleAddSong = async () => {
     if (!newSongTitle.trim() || !newSongLyrics.trim() || !selectedArtistId) return;
+    
+    // --- CREDIT CHECK (Cost: 1) ---
+    if (credits < 1) {
+        alert("Insufficient credits. Song Analysis costs 1 Credit.");
+        return;
+    }
+
     setIsLoading(true);
     try {
-      // Analyze and include original lyrics
+      // Deduct Credit
+      await systemCore.useCredit(1);
+      setCredits(systemCore.getCredits());
+      
+      // Analyze
       const analysis = await analyzeLyrics(newSongTitle, newSongLyrics);
       
       setArtists(prev => prev.map(a => 
@@ -171,6 +191,8 @@ const LyricsAI: React.FC = () => {
           : a
       ));
       
+      systemCore.trackInteraction('LYRICS_AI', 'generate', { type: 'song_analysis' });
+
       setNewSongTitle('');
       setNewSongLyrics('');
       setView('artist');
@@ -179,7 +201,7 @@ const LyricsAI: React.FC = () => {
       setCurrentPage(1);
     } catch (e) {
       console.error("Analysis Error", e);
-      alert("Analysis failed.");
+      alert("Analysis failed. Credits may have been refunded.");
     } finally {
       setIsLoading(false);
     }
@@ -187,12 +209,24 @@ const LyricsAI: React.FC = () => {
 
   const handleGenerateProfile = async () => {
     if (!selectedArtist || selectedArtist.songs.length === 0) return;
+    
+    // --- CREDIT CHECK (Cost: 3) ---
+    if (credits < 3) {
+        alert("Insufficient credits. Full Profile Generation costs 3 Credits.");
+        return;
+    }
+
     setIsGeneratingProfile(true);
     try {
+        await systemCore.useCredit(3);
+        setCredits(systemCore.getCredits());
+
         const profile = await generateArtistProfile(selectedArtist.name, selectedArtist.songs);
         setArtists(prev => prev.map(a => 
             a.id === selectedArtistId ? { ...a, profileAnalysis: profile } : a
         ));
+        
+        systemCore.trackInteraction('LYRICS_AI', 'generate', { type: 'artist_profile' });
     } catch (e) {
         console.error("Profile Gen Error", e);
     } finally {
@@ -252,9 +286,12 @@ const LyricsAI: React.FC = () => {
       <div className="h-14 border-b border-white/5 px-5 flex items-center justify-between bg-black/40 backdrop-blur-xl shrink-0 z-20">
         <div className="flex items-center gap-2.5">
           <div className={`w-8 h-8 rounded-lg ${ACCENT_BG} flex items-center justify-center shadow-lg shadow-[#E6E6FA]/10`}>
-            <Music4 size={18} className="text-black" />
+            <Music size={18} className="text-black" />
           </div>
-          <span className="text-sm font-bold tracking-tight">LyricsAI</span>
+          <div>
+            <span className="text-sm font-bold tracking-tight block leading-none">LyricsAI</span>
+            <span className="text-[9px] text-gray-500 font-mono tracking-wider">{credits} CR</span>
+          </div>
         </div>
         {view !== 'hub' && (
           <button 
@@ -283,7 +320,7 @@ const LyricsAI: React.FC = () => {
               </div>
               {artists.length === 0 ? (
                 <div className="py-24 flex flex-col items-center justify-center text-center opacity-30">
-                  <Mic2 size={48} className="mb-4" />
+                  <Mic size={48} className="mb-4" />
                   <p className="text-sm font-medium">Linguistic database is empty.</p>
                   <button onClick={() => setView('new-artist')} className="text-xs mt-4 underline decoration-gray-500">Create Profile</button>
                 </div>
@@ -448,7 +485,7 @@ const LyricsAI: React.FC = () => {
                                 <Sparkles size={32} className="mx-auto mb-4 text-gray-600" />
                                 <h3 className="text-lg font-bold mb-2">Holistic Analysis</h3>
                                 <p className="text-xs text-gray-500 max-w-xs mx-auto mb-6">
-                                    Generate a deep-dive profile analyzing themes, vocabulary evolution, and signature style across all {selectedArtist.songs.length} songs.
+                                    Generate a deep-dive profile analyzing themes, vocabulary evolution, and signature style across all {selectedArtist.songs.length} songs. (Cost: 3 Credits)
                                 </p>
                                 <button 
                                     onClick={handleGenerateProfile}
@@ -493,7 +530,7 @@ const LyricsAI: React.FC = () => {
                                 </div>
                                 
                                 <button onClick={handleGenerateProfile} className="w-full py-4 text-xs font-bold text-gray-600 hover:text-white transition-colors">
-                                    Refresh Profile
+                                    Refresh Profile (Cost: 3 Credits)
                                 </button>
                             </div>
                         )}
@@ -605,7 +642,7 @@ const LyricsAI: React.FC = () => {
             <div className="w-full max-w-xl space-y-6">
                 <div className="text-center">
                     <h2 className="text-2xl font-black">Linguistic Manuscript</h2>
-                    <p className="text-gray-500 text-sm">Paste lyrics below for deep Gemini analysis.</p>
+                    <p className="text-gray-500 text-sm">Paste lyrics below for deep Gemini analysis. (Cost: 1 Credit)</p>
                 </div>
                 <div className="flex-1 flex flex-col space-y-4">
                     <input type="text" value={newSongTitle} onChange={(e) => setNewSongTitle(e.target.value)} placeholder="Song Title" className="w-full bg-[#1c1c1e] border border-white/10 rounded-xl px-5 py-4 outline-none focus:border-[#E6E6FA]/40 text-sm" />

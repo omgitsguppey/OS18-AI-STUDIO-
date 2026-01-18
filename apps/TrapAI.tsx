@@ -1,5 +1,4 @@
-
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   Gem, 
   ThumbsUp, 
@@ -46,10 +45,16 @@ const TrapAI: React.FC = () => {
   const [currentBar, setCurrentBar] = useState<TrapBar | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [selectedVibe, setSelectedVibe] = useState('Flex');
+  
+  // System State
+  const [credits, setCredits] = useState(0);
 
-  // Load History
+  // Load History & System Core
   useEffect(() => {
     const init = async () => {
+      await systemCore.init();
+      setCredits(systemCore.getCredits());
+
       const saved = await storage.get<TrapBar[]>(STORES.TRAP_AI, 'history');
       if (saved) {
         setHistory(saved);
@@ -58,6 +63,10 @@ const TrapAI: React.FC = () => {
       setIsReady(true);
     };
     init();
+
+    // Poll for credits
+    const interval = setInterval(() => setCredits(systemCore.getCredits()), 5000);
+    return () => clearInterval(interval);
   }, []);
 
   // Save History
@@ -66,14 +75,38 @@ const TrapAI: React.FC = () => {
     storage.set(STORES.TRAP_AI, 'history', history).catch(console.error);
   }, [history, isReady]);
 
-  const handleGenerate = async () => {
-    setIsGenerating(true);
-    try {
-      // Gather feedback context
+  // Wrapper to enforce uniqueness
+  const getUniqueBar = async (attempts = 0): Promise<string> => {
+      if (attempts > 3) throw new Error("AI loop detected");
+
       const liked = history.filter(h => h.rating === 'up').map(h => h.text);
       const disliked = history.filter(h => h.rating === 'down').map(h => h.text);
+      const recent = history.slice(0, 10).map(h => h.text); // Avoid immediate repetition
 
-      const text = await generateTrapBar(liked, disliked, selectedVibe);
+      const text = await generateTrapBar(liked, [...disliked, ...recent], selectedVibe);
+      
+      // Simple duplicate check
+      if (history.some(h => h.text === text)) {
+          console.warn("Duplicate bar detected, retrying...");
+          return getUniqueBar(attempts + 1);
+      }
+      return text;
+  };
+
+  const handleGenerate = async () => {
+    // --- CREDIT CHECK (Cost: 1) ---
+    if (credits < 1) {
+        alert("Insufficient credits. Bar Generation costs 1 Credit.");
+        return;
+    }
+
+    setIsGenerating(true);
+    try {
+      // Deduct Credit
+      await systemCore.useCredit(1);
+      setCredits(systemCore.getCredits());
+
+      const text = await getUniqueBar();
       
       const newBar: TrapBar = {
         id: Date.now().toString(),
@@ -85,6 +118,9 @@ const TrapAI: React.FC = () => {
 
       setHistory([newBar, ...history]);
       setCurrentBar(newBar);
+      
+      systemCore.trackInteraction('TRAP_AI', 'generate', { vibe: selectedVibe });
+
     } catch (e) {
       console.error(e);
       alert("Microphone check failed. Try again.");
@@ -96,16 +132,15 @@ const TrapAI: React.FC = () => {
   const handleRate = (rating: 'up' | 'down') => {
     if (!currentBar) return;
     
-    // Toggle rating if clicking same one, else set new
     const newRating = currentBar.rating === rating ? null : rating;
     
     const updatedBar = { ...currentBar, rating: newRating };
     setCurrentBar(updatedBar);
     setHistory(prev => prev.map(h => h.id === currentBar.id ? updatedBar : h));
 
-    // SYSTEM LEARNING:
-    if (rating === 'down') {
-        systemCore.trackInteraction(AppID.TRAP_AI, 'dislike', { content: currentBar.text });
+    // SYSTEM LEARNING (Fixed: Mapped 'like' to 'success')
+    if (newRating) {
+        systemCore.trackInteraction('TRAP_AI', newRating === 'up' ? 'success' : 'dislike', { content: currentBar.text });
     }
   };
 
@@ -123,6 +158,7 @@ const TrapAI: React.FC = () => {
     navigator.clipboard.writeText(text);
     setCopiedId(id);
     setTimeout(() => setCopiedId(null), 1500);
+    systemCore.trackInteraction('TRAP_AI', 'copy', { content: text });
   };
 
   if (!isReady) return (
@@ -151,8 +187,8 @@ const TrapAI: React.FC = () => {
             <Gem size={18} className="text-indigo-400" />
           </div>
           <div>
-            <h1 className="text-lg font-black tracking-tight text-white">TrapAI</h1>
-            <p className="text-[9px] font-bold text-gray-500 uppercase tracking-widest">Ghostwriter</p>
+            <h1 className="text-lg font-black tracking-tight text-white leading-none">TrapAI</h1>
+            <p className="text-[9px] font-bold text-gray-500 uppercase tracking-widest mt-0.5">{credits} CR</p>
           </div>
         </div>
         
@@ -242,7 +278,7 @@ const TrapAI: React.FC = () => {
             <div className="pt-8 pb-4 shrink-0">
               <button 
                 onClick={handleGenerate}
-                disabled={isGenerating}
+                disabled={isGenerating || credits < 1}
                 className="w-full py-6 bg-white text-black rounded-[2rem] font-black text-lg uppercase tracking-widest hover:scale-[1.02] active:scale-95 transition-all shadow-[0_0_30px_rgba(255,255,255,0.15)] flex items-center justify-center gap-3 disabled:opacity-50 disabled:scale-100"
               >
                 {isGenerating ? <Loader2 size={24} className="animate-spin" /> : <><Gem size={20} fill="black" /> Spit Bar</>}

@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import { 
   ListMusic, 
@@ -7,16 +6,16 @@ import {
   Clock, 
   MoreHorizontal, 
   Play, 
-  Shuffle, 
   Heart, 
   Download, 
   Loader2,
   ChevronLeft,
   Search,
-  CheckCircle2
+  Disc
 } from 'lucide-react';
 import { generatePlaylistMetadata, generatePlaylistCover, GeneratedPlaylist } from '../services/geminiService';
 import { storage, STORES } from '../services/storageService';
+import { systemCore } from '../services/systemCore';
 
 const MOODS = [
   "Chill", "Hype", "Melancholy", "Focus", "Party", 
@@ -44,18 +43,29 @@ const PlaylistAI: React.FC = () => {
   const [selectedColor, setSelectedColor] = useState(COLORS[0]);
   const [length, setLength] = useState(15);
   
+  // System State
+  const [credits, setCredits] = useState(0);
   const [isGenerating, setIsGenerating] = useState(false);
   const [genStep, setGenStep] = useState('');
   const [isExporting, setIsExporting] = useState(false);
 
+  // --- INIT ---
   useEffect(() => {
     const init = async () => {
+      await systemCore.init();
+      setCredits(systemCore.getCredits());
+
       const saved = await storage.get<GeneratedPlaylist[]>(STORES.PLAYLIST, 'history');
       if (saved) setHistory(saved);
     };
     init();
+
+    // Poll for credits
+    const interval = setInterval(() => setCredits(systemCore.getCredits()), 5000);
+    return () => clearInterval(interval);
   }, []);
 
+  // Persist History
   useEffect(() => {
     storage.set(STORES.PLAYLIST, 'history', history).catch(console.error);
   }, [history]);
@@ -67,10 +77,20 @@ const PlaylistAI: React.FC = () => {
   const handleGenerate = async () => {
     if (selectedMoods.length === 0 && !aesthetic) return;
     
+    // --- CREDIT CHECK (Cost: 2) ---
+    if (credits < 2) {
+        alert("Insufficient credits. Playlist Curation costs 2 Credits.");
+        return;
+    }
+
     setIsGenerating(true);
     setGenStep('Curating tracks...');
     
     try {
+      // Deduct Credits
+      await systemCore.useCredit(2);
+      setCredits(systemCore.getCredits());
+
       // 1. Generate Metadata & Tracks
       const metadata = await generatePlaylistMetadata(
         selectedMoods, 
@@ -93,7 +113,7 @@ const PlaylistAI: React.FC = () => {
         createdAt: Date.now(),
         moods: selectedMoods,
         aesthetic: aesthetic,
-        primaryColor: selectedColor.hex, // Use user selected color as fallback or AI suggestion
+        primaryColor: selectedColor.hex,
         ...metadata,
         coverImageBase64: coverBase64 || undefined
       };
@@ -101,6 +121,9 @@ const PlaylistAI: React.FC = () => {
       setHistory([newPlaylist, ...history]);
       setCurrentPlaylist(newPlaylist);
       setView('player');
+      
+      systemCore.trackInteraction('PLAYLIST_AI', 'generate', { type: 'vibe_curation' });
+
     } catch (e) {
       console.error(e);
       alert("Generation failed. Please check quotas.");
@@ -125,6 +148,7 @@ const PlaylistAI: React.FC = () => {
 
   return (
     <div className="h-full bg-[#121212] text-white flex flex-col font-sans overflow-hidden">
+      
       {/* Header */}
       {view === 'create' ? (
         <div className="h-16 px-6 flex items-center justify-between border-b border-white/5 bg-[#121212] shrink-0 z-10">
@@ -132,7 +156,10 @@ const PlaylistAI: React.FC = () => {
             <div className="w-8 h-8 rounded-full bg-green-500 flex items-center justify-center text-black">
               <ListMusic size={18} />
             </div>
-            <span className="font-bold">Playlist AI</span>
+            <div>
+                <span className="font-bold block leading-none">Playlist AI</span>
+                <span className="text-[9px] text-gray-500 font-mono tracking-wider">{credits} CR</span>
+            </div>
           </div>
           {history.length > 0 && (
             <button onClick={() => { setCurrentPlaylist(history[0]); setView('player'); }} className="text-xs font-bold text-gray-400 hover:text-white">
@@ -154,7 +181,7 @@ const PlaylistAI: React.FC = () => {
           <div className="p-6 max-w-xl mx-auto space-y-8 animate-fade-in pb-20">
             <div className="text-center py-6">
               <h2 className="text-3xl font-black mb-2">Vibe Tuner</h2>
-              <p className="text-gray-400 text-sm">Curate a sonic atmosphere with AI.</p>
+              <p className="text-gray-400 text-sm">Curate a sonic atmosphere with AI. (2 Credits)</p>
             </div>
 
             <div className="space-y-4">
@@ -216,7 +243,7 @@ const PlaylistAI: React.FC = () => {
 
             <button 
               onClick={handleGenerate}
-              disabled={isGenerating || (selectedMoods.length === 0 && !aesthetic)}
+              disabled={isGenerating || (selectedMoods.length === 0 && !aesthetic) || credits < 2}
               className="w-full py-4 bg-green-500 text-black rounded-full font-bold text-sm uppercase tracking-widest hover:scale-[1.02] active:scale-95 transition-all disabled:opacity-50 disabled:scale-100 flex items-center justify-center gap-2 shadow-lg shadow-green-900/20"
             >
               {isGenerating ? <Loader2 className="animate-spin" /> : <><Sparkles size={18} fill="black" /> Generate Playlist</>}
