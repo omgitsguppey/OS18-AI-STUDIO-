@@ -1,4 +1,3 @@
-
 import { LucideIcon } from 'lucide-react';
 
 export enum AppID {
@@ -50,4 +49,33 @@ export interface AppState {
   isOpen: boolean;
   isMinimized: boolean;
   zIndex: number;
+}
+
+// --- SYSTEM INTELLIGENCE & TELEMETRY TYPES ---
+// Shared between Client (Collector) and Server (Dreamer)
+
+export type MemoryScope = 'Global' | 'Creative' | 'Business' | 'Utility';
+
+export interface LearnedFact {
+  content: string;
+  scope: MemoryScope;
+  confidence: number;
+  source: 'implicit_edit' | 'explicit_save' | 'clipboard' | 'dwell';
+  timestamp: number;
+}
+
+export interface Insight {
+  id: string;
+  type: 'pattern' | 'anomaly' | 'behavior';
+  message: string;
+  confidence: number;
+  timestamp: number;
+}
+
+export interface InteractionEvent {
+  appId: string;
+  action: 'open' | 'generate' | 'regenerate' | 'edit' | 'copy' | 'download' | 'dwell' | 'abandon' | 'success' | 'dislike' | 'completion' | 'error' | 'sys_event' | 'install_app' | 'open_app';
+  timestamp: number;
+  metadata?: any;
+  score?: number; // Optional on client, calculated on server
 }

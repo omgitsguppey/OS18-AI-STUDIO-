@@ -107,6 +107,9 @@ const App: React.FC = () => {
     const unsubscribe = authService.onUserChange((u) => {
       setUser(u);
       setLoadingAuth(false);
+      if (u && authService.isAdmin(u)) {
+        console.log("Welcome back, Administrator Johnson.");
+      }
     });
     return () => unsubscribe();
   }, []);
@@ -140,6 +143,22 @@ const App: React.FC = () => {
     if (!user) return; 
     systemCore.init().catch(console.error);
     
+    // Global Event Tracking
+    const handleGlobalClick = (e: MouseEvent) => {
+        const target = e.target as HTMLElement;
+        const label = target.innerText || target.getAttribute('aria-label') || target.tagName;
+        if (!target.closest('.font-mono')) {
+            systemCore.trackRawEvent('click', label.substring(0, 30));
+        }
+    };
+
+    const handleGlobalKey = (e: KeyboardEvent) => {
+        systemCore.trackRawEvent('keypress', 'Input Activity');
+    };
+
+    window.addEventListener('click', handleGlobalClick);
+    window.addEventListener('keydown', handleGlobalKey);
+
     // Load Settings
     const loadSettings = async () => {
         const savedSettings = await storage.get<any>(STORES.SYSTEM, 'user_settings');
@@ -176,9 +195,20 @@ const App: React.FC = () => {
              if (s.boldText) document.body.classList.add('font-bold');
              else document.body.classList.remove('font-bold');
         }
+        if (s.debugBorders !== undefined) {
+            if (s.debugBorders) document.body.classList.add('debug-borders');
+            else document.body.classList.remove('debug-borders');
+        }
     };
     window.addEventListener('sys_settings_update', handleSettingsUpdate);
-    return () => window.removeEventListener('sys_settings_update', handleSettingsUpdate);
+    window.addEventListener('system_settings_change', handleSettingsUpdate);
+
+    return () => {
+        window.removeEventListener('click', handleGlobalClick);
+        window.removeEventListener('keydown', handleGlobalKey);
+        window.removeEventListener('sys_settings_update', handleSettingsUpdate);
+        window.removeEventListener('system_settings_change', handleSettingsUpdate);
+    };
   }, [user]);
 
   // FPS Loop
@@ -206,6 +236,14 @@ const App: React.FC = () => {
         activeAppStartTimeRef.current = Date.now();
         systemCore.trackInteraction(activeApp, 'open');
     }
+    return () => {
+        if (activeApp && activeAppStartTimeRef.current > 0) {
+            const duration = (Date.now() - activeAppStartTimeRef.current) / 1000;
+            if (duration > 1) {
+                systemCore.trackInteraction(activeApp, 'dwell', { durationSeconds: duration });
+            }
+        }
+    };
   }, [activeApp]);
 
   const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
@@ -338,6 +376,7 @@ const App: React.FC = () => {
             <svg viewBox="0 0 24 24" className="w-5 h-5" xmlns="http://www.w3.org/2000/svg"><path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/><path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/><path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/><path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/></svg>
             Sign in with Google
         </button>
+        <p className="absolute bottom-10 text-xs text-white/20">Authorized Personnel Only</p>
       </div>
     );
   }
@@ -372,7 +411,7 @@ const App: React.FC = () => {
         </div>
       )}
 
-      {/* --- APP GRID (FORCED 4x6 LAYOUT) --- */}
+      {/* --- APP GRID (REFINED FOR 16 PRO MAX SYMMETRY) --- */}
       <div 
         ref={scrollRef} 
         onScroll={handleScroll} 
@@ -382,9 +421,11 @@ const App: React.FC = () => {
       >
         {pages.map((pageApps, pageIdx) => (
           <div key={pageIdx} className="min-w-full h-full snap-start relative">
-             {/* GRID CONTAINER: Absolute Anchoring (Top 24, Bottom 40) */}
+             {/* GRID CONTAINER: Absolute Anchoring (Top 24, Bottom 52) 
+                 Refinement: Raised bottom anchor from 40 to 52 to guarantee label 
+                 clearance above Search/Dots on the 16 Pro Max display. */}
              <div 
-                className="absolute left-1/2 -translate-x-1/2 top-24 bottom-40 w-[90vw] grid gap-x-4 gap-y-1 justify-items-center items-center"
+                className="absolute left-1/2 -translate-x-1/2 top-24 bottom-52 w-[90vw] grid gap-x-4 gap-y-0.5 justify-items-center items-center"
                 style={{
                     gridTemplateColumns: `repeat(${layout.cols}, minmax(0, 1fr))`,
                     gridTemplateRows: `repeat(${layout.rows}, minmax(0, 1fr))`
@@ -407,21 +448,21 @@ const App: React.FC = () => {
 
       {/* Pagination Dots - Lowered Position (Above Search) */}
       {pages.length > 1 && (
-        <div className="absolute bottom-36 left-0 right-0 flex justify-center gap-2 z-40 pointer-events-none transition-all duration-300">
+        <div className="absolute bottom-[10.5rem] left-0 right-0 flex justify-center gap-2 z-40 pointer-events-none transition-all duration-300">
             {pages.map((_, i) => <div key={i} className={`w-2 h-2 rounded-full transition-all duration-300 ${currentPage === i ? 'bg-white scale-110 shadow-sm' : 'bg-white/30'}`} />)}
         </div>
       )}
 
       {/* Search Pill - Lowered Position (Above Dock) */}
-      <div className="absolute bottom-24 left-0 right-0 flex justify-center z-40 pointer-events-none">
+      <div className="absolute bottom-[7.5rem] left-0 right-0 flex justify-center z-40 pointer-events-none">
         <button onClick={() => setIsSearchOpen(true)} className="pointer-events-auto bg-white/10 hover:bg-white/20 backdrop-blur-xl border border-white/5 px-5 py-2 rounded-full flex items-center gap-2 transition-all active:scale-95 group shadow-lg shadow-black/20">
             <Search size={14} className="text-white/70 group-hover:text-white" /><span className="text-xs font-medium text-white/70 group-hover:text-white">Search</span>
         </button>
       </div>
 
-      {isEditMode && <div className="absolute bottom-[11rem] left-0 right-0 text-center pointer-events-none animate-fade-in z-40"><span className="bg-black/40 backdrop-blur-md px-4 py-1.5 rounded-full text-xs font-bold text-white/90 border border-white/10 shadow-lg">Triple-click space to finish editing</span></div>}
+      {isEditMode && <div className="absolute bottom-[13rem] left-0 right-0 text-center pointer-events-none animate-fade-in z-40"><span className="bg-black/40 backdrop-blur-md px-4 py-1.5 rounded-full text-xs font-bold text-white/90 border border-white/10 shadow-lg">Triple-click space to finish editing</span></div>}
 
-      {/* Dock */}
+      {/* Dock - Anchored at bottom-6 for consistent spacing */}
       <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-50 transition-all duration-300 w-auto max-w-[95vw]">
         <div className="flex items-center gap-2 sm:gap-4 px-3 sm:px-5 py-3 sm:py-4 bg-white/10 backdrop-blur-3xl border border-white/20 rounded-[2rem] sm:rounded-[2.5rem] shadow-2xl shadow-black/60 hover:scale-[1.02] hover:bg-white/15">
           {[AppID.DRAMA, AppID.SELL_IT, AppID.LYRICS_AI, AppID.CAPTIONS].map(id => (
@@ -432,6 +473,12 @@ const App: React.FC = () => {
           ))}
         </div>
       </div>
+
+      {/* PHANTOM HOME BUTTON */}
+      <div 
+        className="absolute bottom-0 left-1/2 -translate-x-1/2 w-64 h-12 z-[100] cursor-pointer"
+        onClick={() => { if (activeApp) setActiveApp(null); }}
+      />
 
       {/* Windows */}
       {openApps.map(appId => (
