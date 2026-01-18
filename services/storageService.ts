@@ -1,13 +1,11 @@
-
-/**
- * Advanced Storage Service
- * Isolated Object Stores for multi-app data persistence.
- */
+import { db, auth } from "./firebaseConfig";
+import { 
+  collection, doc, getDoc, setDoc, deleteDoc, getDocs, 
+  writeBatch, query, where 
+} from "firebase/firestore";
 import { AppID } from "../types";
 
-const DB_NAME = 'OS18_Experience_DB_v2';
-const DB_VERSION = 5; // Incremented for Shorts Studio
-
+// --- Collection Names ---
 export const STORES = {
   LYRICS: 'lyrics_ai_data',     
   ALBUMS: 'albums_ai_data',     
@@ -34,9 +32,8 @@ export const STORES = {
   TRAP_AI: 'trap_ai_data',
   SPEECH_AI: 'speech_ai_data',
   SHORTS_STUDIO: 'shorts_studio_data',
-  // NEW SYSTEM STORES
-  SYSTEM_EVENTS: 'sys_telemetry_events', // Raw high-frequency logs
-  SYSTEM_MEMORY: 'sys_core_memory'       // Consolidated "Brain" facts
+  SYSTEM_EVENTS: 'sys_telemetry_events', 
+  SYSTEM_MEMORY: 'sys_core_memory'       
 };
 
 export interface StoreStats {
@@ -49,145 +46,114 @@ export interface AIMetadata {
   appId: string;
   storeName: string;
   contextCount: number;
-  memoryUsage: number; // in bytes
+  memoryUsage: number;
   lastUpdated: number;
 }
 
 class StorageService {
-  private db: IDBDatabase | null = null;
+  
+  // Helper: Get current user's isolated collection path
+  private getCollectionRef(storeName: string) {
+    const user = auth.currentUser;
+    if (!user) throw new Error("No user logged in");
+    // Path: users/{uid}/{storeName}
+    return collection(db, "users", user.uid, storeName);
+  }
 
-  async init(): Promise<void> {
-    if (this.db) return;
-
-    return new Promise((resolve, reject) => {
-      const request = indexedDB.open(DB_NAME, DB_VERSION);
-
-      request.onupgradeneeded = (event) => {
-        const db = (event.target as IDBOpenDBRequest).result;
-        Object.values(STORES).forEach(storeName => {
-          if (!db.objectStoreNames.contains(storeName)) {
-            // For event logs, we want auto-incrementing keys for speed
-            if (storeName === STORES.SYSTEM_EVENTS) {
-                db.createObjectStore(storeName, { autoIncrement: true });
-            } else {
-                db.createObjectStore(storeName);
-            }
-          }
-        });
-      };
-
-      request.onsuccess = (event) => {
-        this.db = (event.target as IDBOpenDBRequest).result;
-        resolve();
-      };
-
-      request.onerror = (event) => {
-        console.error('IndexedDB error:', (event.target as IDBOpenDBRequest).error);
-        reject('IndexedDB failed to initialize');
-      };
-    });
+  // Helper: Get specific doc ref
+  private getDocRef(storeName: string, key: string) {
+    const user = auth.currentUser;
+    if (!user) throw new Error("No user logged in");
+    return doc(db, "users", user.uid, storeName, key);
   }
 
   async set(storeName: string, key: string, value: any): Promise<void> {
-    await this.init();
-    return new Promise((resolve, reject) => {
-      const transaction = this.db!.transaction([storeName], 'readwrite');
-      const store = transaction.objectStore(storeName);
-      const request = store.put(value, key);
-
-      request.onsuccess = () => resolve();
-      request.onerror = () => reject(`Failed to write to store: ${storeName}`);
-    });
+    if (!auth.currentUser) return; // Silent fail if offline/logged out
+    try {
+        const ref = this.getDocRef(storeName, key);
+        // We wrap primitive values in an object if needed, but usually we save objects
+        // Adding timestamp for sorting
+        const payload = { ...value, _updated: Date.now() };
+        await setDoc(ref, payload);
+    } catch (e) {
+        console.error("Firestore Write Error", e);
+    }
   }
 
-  // Specialized method for high-frequency event logging
+  // Fire-and-forget logging (Optimized)
   async logEvent(value: any): Promise<void> {
-    await this.init();
-    return new Promise((resolve) => {
-        const transaction = this.db!.transaction([STORES.SYSTEM_EVENTS], 'readwrite');
-        const store = transaction.objectStore(STORES.SYSTEM_EVENTS);
-        // We don't wait for success to ensure UI non-blocking, fire and forget
-        store.add({ ...value, timestamp: Date.now() });
-        resolve();
-    });
+    if (!auth.currentUser) return;
+    try {
+        const col = this.getCollectionRef(STORES.SYSTEM_EVENTS);
+        // Use addDoc for auto-generated IDs
+        // We don't await this strictly to keep UI fast
+        await setDoc(doc(col), { ...value, timestamp: Date.now() });
+    } catch (e) {
+        // Suppress telemetry errors
+    }
   }
 
   async get<T>(storeName: string, key: string): Promise<T | null> {
-    await this.init();
-    return new Promise((resolve, reject) => {
-      const transaction = this.db!.transaction([storeName], 'readonly');
-      const store = transaction.objectStore(storeName);
-      const request = store.get(key);
-
-      request.onsuccess = () => resolve(request.result || null);
-      request.onerror = () => reject(`Failed to read from store: ${storeName}`);
-    });
+    if (!auth.currentUser) return null;
+    try {
+        const ref = this.getDocRef(storeName, key);
+        const snap = await getDoc(ref);
+        if (snap.exists()) {
+            return snap.data() as T;
+        }
+        return null;
+    } catch (e) {
+        console.error("Firestore Read Error", e);
+        return null;
+    }
   }
 
   async getAll<T>(storeName: string): Promise<T[]> {
-    await this.init();
-    return new Promise((resolve) => {
-        const transaction = this.db!.transaction([storeName], 'readonly');
-        const store = transaction.objectStore(storeName);
-        const request = store.getAll();
-        request.onsuccess = () => resolve(request.result || []);
-    });
+    if (!auth.currentUser) return [];
+    try {
+        const col = this.getCollectionRef(storeName);
+        const snap = await getDocs(col);
+        return snap.docs.map(d => d.data() as T);
+    } catch (e) {
+        return [];
+    }
   }
 
   async remove(storeName: string, key: string): Promise<void> {
-    await this.init();
-    return new Promise((resolve, reject) => {
-      const transaction = this.db!.transaction([storeName], 'readwrite');
-      const store = transaction.objectStore(storeName);
-      const request = store.delete(key);
-      request.onsuccess = () => resolve();
-      request.onerror = () => reject(`Failed to delete from store: ${storeName}`);
-    });
+    if (!auth.currentUser) return;
+    await deleteDoc(this.getDocRef(storeName, key));
   }
 
   async clearStore(storeName: string): Promise<void> {
-    await this.init();
-    return new Promise((resolve, reject) => {
-      const transaction = this.db!.transaction([storeName], 'readwrite');
-      const store = transaction.objectStore(storeName);
-      const request = store.clear();
-      request.onsuccess = () => resolve();
-      request.onerror = () => reject(`Failed to clear store: ${storeName}`);
+    if (!auth.currentUser) return;
+    const col = this.getCollectionRef(storeName);
+    const snap = await getDocs(col);
+    
+    // Batch delete (limit 500 per batch in Firestore)
+    const batch = writeBatch(db);
+    snap.docs.forEach((doc) => {
+        batch.delete(doc.ref);
     });
+    await batch.commit();
   }
 
   async getStoreStats(storeName: string): Promise<StoreStats> {
-    await this.init();
-    return new Promise((resolve) => {
-      const transaction = this.db!.transaction([storeName], 'readonly');
-      const store = transaction.objectStore(storeName);
-      const countRequest = store.count();
-      
-      let size = 0;
-      // Sampling size for performance - exact byte count is expensive on large stores
-      const cursorRequest = store.openCursor();
-      let iterations = 0;
-      
-      cursorRequest.onsuccess = (e: any) => {
-        const cursor = e.target.result;
-        if (cursor && iterations < 50) { // Sample first 50 for speed estimation
-          const value = cursor.value;
-          size += new Blob([JSON.stringify(value)]).size;
-          iterations++;
-          cursor.continue();
-        } else {
-          // Extrapolate if we hit limit
-          const totalCount = countRequest.result || 0;
-          const estimatedTotalSize = iterations > 0 ? (size / iterations) * totalCount : 0;
-          
-          resolve({
-            name: storeName,
-            count: totalCount,
-            sizeBytes: estimatedTotalSize
-          });
-        }
-      };
+    if (!auth.currentUser) return { name: storeName, count: 0, sizeBytes: 0 };
+    
+    // Firestore doesn't give size easily, so we estimate
+    const col = this.getCollectionRef(storeName);
+    const snap = await getDocs(col); // CAUTION: This reads all docs. Expensive at scale.
+    
+    let size = 0;
+    snap.docs.forEach(d => {
+        size += JSON.stringify(d.data()).length;
     });
+
+    return {
+        name: storeName,
+        count: snap.size,
+        sizeBytes: size
+    };
   }
 
   async getAIMetadata(appId: AppID, storeName: string): Promise<AIMetadata> {
@@ -201,8 +167,8 @@ class StorageService {
     };
   }
 
+  // Admin Tool: Clear everything for this user
   async purgeAll(): Promise<void> {
-    await this.init();
     const stores = Object.values(STORES);
     for (const s of stores) {
       await this.clearStore(s);

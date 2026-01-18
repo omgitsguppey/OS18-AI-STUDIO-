@@ -1,5 +1,4 @@
-
-import React, { useState, useEffect, useRef, Suspense, memo } from 'react';
+import React, { useState, useEffect, useRef, Suspense, memo, useMemo } from 'react';
 import { ALL_APPS, INITIAL_INSTALLED_APPS, WALLPAPERS } from './constants';
 import { AppID, AppConfig } from './types';
 import AppIcon from './components/AppIcon';
@@ -7,6 +6,8 @@ import Window from './components/Window';
 import { Wifi, Battery, Search, Loader2 } from 'lucide-react';
 import { systemCore } from './services/systemCore';
 import { storage, STORES } from './services/storageService';
+import { authService } from './services/authService'; // <--- NEW IMPORT
+import { User } from 'firebase/auth'; // <--- NEW IMPORT
 
 // --- LAZY LOADED APPS (Code Splitting) ---
 const Calculator = React.lazy(() => import('./apps/Calculator'));
@@ -40,8 +41,6 @@ const OperatorAI = React.lazy(() => import('./apps/OperatorAI'));
 const SpeechAI = React.lazy(() => import('./apps/SpeechAI'));
 const ShortsStudio = React.lazy(() => import('./apps/ShortsStudio'));
 
-const APPS_PER_PAGE = 24;
-
 const LoadingFallback = () => (
   <div className="h-full flex items-center justify-center bg-[#1c1c1e] text-white">
     <Loader2 size={32} className="animate-spin opacity-50" />
@@ -68,6 +67,11 @@ const StatusBar = memo(() => {
 });
 
 const App: React.FC = () => {
+  // --- AUTHENTICATION STATE ---
+  const [user, setUser] = useState<User | null>(null);
+  const [loadingAuth, setLoadingAuth] = useState(true);
+
+  // --- OS STATE ---
   const [installedApps, setInstalledApps] = useState<AppID[]>(INITIAL_INSTALLED_APPS);
   const [openApps, setOpenApps] = useState<AppID[]>([]);
   const [activeApp, setActiveApp] = useState<AppID | null>(null);
@@ -86,6 +90,9 @@ const App: React.FC = () => {
   const [nightShift, setNightShift] = useState(false);
   const [showFPS, setShowFPS] = useState(false);
   
+  // Responsive Layout State
+  const [layout, setLayout] = useState({ cols: 4, rows: 5, maxApps: 20, isLandscape: false });
+
   // FPS Counter
   const fpsRef = useRef(0);
   const framesRef = useRef(0);
@@ -94,8 +101,75 @@ const App: React.FC = () => {
   const scrollRef = useRef<HTMLDivElement>(null);
   const activeAppStartTimeRef = useRef<number>(0);
 
+  // --- AUTH LISTENER ---
   useEffect(() => {
+    const unsubscribe = authService.onUserChange((u) => {
+      setUser(u);
+      setLoadingAuth(false);
+      
+      // Admin Check
+      if (u && authService.isAdmin(u)) {
+        console.log("Welcome back, Administrator Johnson.");
+      }
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // --- LAYOUT & SYSTEM INIT ---
+  useEffect(() => {
+    const calculateLayout = () => {
+        const width = window.innerWidth;
+        const height = window.innerHeight;
+        const isLandscape = width > height;
+
+        const TOP_RESERVE = 60;
+        const BOTTOM_RESERVE = isLandscape && height < 500 ? 110 : 150; 
+
+        const availableW = width - 40; 
+        const availableH = height - TOP_RESERVE - BOTTOM_RESERVE;
+
+        const SLOT_W = 90; 
+        const SLOT_H = 105;
+
+        let cols = Math.floor(availableW / SLOT_W);
+        let rows = Math.floor(availableH / SLOT_H);
+
+        cols = Math.max(3, Math.min(cols, 12)); 
+        rows = Math.max(1, Math.min(rows, 8));
+
+        setLayout({
+            cols,
+            rows,
+            maxApps: cols * rows,
+            isLandscape
+        });
+    };
+
+    calculateLayout();
+    window.addEventListener('resize', calculateLayout);
+    return () => window.removeEventListener('resize', calculateLayout);
+  }, []);
+
+  // --- NEURAL BACKEND INITIALIZATION & LISTENERS ---
+  useEffect(() => {
+    if (!user) return; // Only init system core if logged in
+
     systemCore.init().catch(console.error);
+    
+    const handleGlobalClick = (e: MouseEvent) => {
+        const target = e.target as HTMLElement;
+        const label = target.innerText || target.getAttribute('aria-label') || target.tagName;
+        if (!target.closest('.font-mono')) {
+            systemCore.trackRawEvent('click', label.substring(0, 30));
+        }
+    };
+
+    const handleGlobalKey = (e: KeyboardEvent) => {
+        systemCore.trackRawEvent('keypress', 'Input Activity');
+    };
+
+    window.addEventListener('click', handleGlobalClick);
+    window.addEventListener('keydown', handleGlobalKey);
     
     // Initial Settings Load
     const loadSettings = async () => {
@@ -103,17 +177,15 @@ const App: React.FC = () => {
         const savedWp = await storage.get<string>(STORES.SYSTEM, 'wallpaper_id');
         
         if (savedSettings) {
-            setDimLevel(savedSettings.dimLevel || 0); // Kept for legacy support if needed
+            setDimLevel(savedSettings.dimLevel || 0);
             setReducedMotion(savedSettings.reducedMotion || false);
             setNightShift(savedSettings.nightShift || false);
             setShowFPS(savedSettings.showFPS || false);
             
-            // Apply text size
             document.documentElement.style.setProperty('--text-scale', savedSettings.textSize?.toString() || '1');
             if (savedSettings.boldText) document.body.classList.add('font-bold');
             else document.body.classList.remove('font-bold');
             
-            // Debug Borders
             if (savedSettings.debugBorders) document.body.classList.add('debug-borders');
             else document.body.classList.remove('debug-borders');
         }
@@ -121,10 +193,9 @@ const App: React.FC = () => {
     };
     loadSettings();
 
-    // Listen for changes from SettingsApp (unified event)
     const handleSettingsUpdate = (e: Event) => {
         const s = (e as CustomEvent).detail;
-        if (s.dimLevel !== undefined) setDimLevel(s.dimLevel); // Legacy
+        if (s.dimLevel !== undefined) setDimLevel(s.dimLevel);
         if (s.reducedMotion !== undefined) setReducedMotion(s.reducedMotion);
         if (s.nightShift !== undefined) setNightShift(s.nightShift);
         if (s.showFPS !== undefined) setShowFPS(s.showFPS);
@@ -139,14 +210,15 @@ const App: React.FC = () => {
         }
     };
     window.addEventListener('sys_settings_update', handleSettingsUpdate);
-    // Legacy support
     window.addEventListener('system_settings_change', handleSettingsUpdate);
 
     return () => {
+        window.removeEventListener('click', handleGlobalClick);
+        window.removeEventListener('keydown', handleGlobalKey);
         window.removeEventListener('sys_settings_update', handleSettingsUpdate);
         window.removeEventListener('system_settings_change', handleSettingsUpdate);
     };
-  }, []);
+  }, [user]);
 
   // FPS Loop
   useEffect(() => {
@@ -158,8 +230,6 @@ const App: React.FC = () => {
               fpsRef.current = framesRef.current;
               framesRef.current = 0;
               lastTimeRef.current = time;
-              // Force re-render of just the FPS counter part if we stored state, 
-              // but purely Ref approach avoids full app re-render.
               const el = document.getElementById('fps-counter');
               if (el) el.innerText = `${fpsRef.current} FPS`;
           }
@@ -279,15 +349,55 @@ const App: React.FC = () => {
     );
   };
 
-  const pages = [];
-  for (let i = 0; i < installedApps.length; i += APPS_PER_PAGE) {
-    pages.push(installedApps.slice(i, i + APPS_PER_PAGE));
-  }
-  if (pages.length === 0) pages.push([]);
+  const pages = useMemo(() => {
+    const p = [];
+    const limit = layout.maxApps || 1;
+    for (let i = 0; i < installedApps.length; i += limit) {
+        p.push(installedApps.slice(i, i + limit));
+    }
+    if (p.length === 0) p.push([]);
+    return p;
+  }, [installedApps, layout.maxApps]);
 
   const currentWallpaper = WALLPAPERS.find(w => w.id === wallpaperId) || WALLPAPERS[0];
-  const filteredApps = Object.values(ALL_APPS).filter(app => installedApps.includes(app.id) && (app.name.toLowerCase().includes(searchQuery.toLowerCase()) || app.description.toLowerCase().includes(searchQuery.toLowerCase()))).sort((a, b) => a.name.localeCompare(b.name));
+  const filteredApps = (Object.values(ALL_APPS) as AppConfig[]).filter(app => installedApps.includes(app.id) && (app.name.toLowerCase().includes(searchQuery.toLowerCase()) || app.description.toLowerCase().includes(searchQuery.toLowerCase()))).sort((a, b) => a.name.localeCompare(b.name));
 
+  // --- LOGIN SCREEN RENDER ---
+  if (loadingAuth) {
+    return <div className="bg-black h-screen w-screen flex items-center justify-center text-white"><Loader2 className="animate-spin" /></div>;
+  }
+
+  if (!user) {
+    return (
+      <div className="h-screen w-screen bg-black flex flex-col items-center justify-center text-white space-y-8 relative overflow-hidden">
+        {/* Background Ambient */}
+        <div className="absolute inset-0 bg-gradient-to-tr from-blue-900/20 via-purple-900/20 to-black pointer-events-none" />
+        
+        <div className="z-10 text-center space-y-2">
+            <h1 className="text-6xl font-bold tracking-tighter bg-gradient-to-r from-blue-400 to-purple-400 bg-clip-text text-transparent">OS 18</h1>
+            <p className="text-white/50 text-sm tracking-widest uppercase">Web Experience</p>
+        </div>
+
+        <button 
+            onClick={() => authService.login()}
+            className="z-10 flex items-center gap-3 px-8 py-4 bg-white text-black rounded-full font-bold hover:scale-105 active:scale-95 transition-all shadow-xl shadow-white/10"
+        >
+            {/* Google G Icon */}
+            <svg viewBox="0 0 24 24" className="w-5 h-5" xmlns="http://www.w3.org/2000/svg">
+              <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
+              <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
+              <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/>
+              <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
+            </svg>
+            Sign in with Google
+        </button>
+
+        <p className="absolute bottom-10 text-xs text-white/20">Authorized Personnel Only</p>
+      </div>
+    );
+  }
+
+  // --- MAIN OS RENDER ---
   return (
     <div 
       className="relative w-screen h-[100dvh] overflow-hidden text-white font-sans selection:bg-blue-500/30 transition-all duration-700 ease-in-out" 
@@ -336,11 +446,28 @@ const App: React.FC = () => {
         </div>
       )}
 
-      {/* App Grid */}
-      <div ref={scrollRef} onScroll={handleScroll} className="absolute inset-0 flex overflow-x-auto overflow-y-hidden snap-x snap-mandatory no-scrollbar scroll-smooth z-10" onClick={handleBackgroundClick} style={{ scrollbarWidth: 'none' }}>
+      {/* App Grid - Auto Correcting */}
+      <div 
+        ref={scrollRef} 
+        onScroll={handleScroll} 
+        className="absolute inset-0 flex overflow-x-auto overflow-y-hidden snap-x snap-mandatory no-scrollbar scroll-smooth z-10" 
+        onClick={handleBackgroundClick} 
+        style={{ scrollbarWidth: 'none' }}
+      >
         {pages.map((pageApps, pageIdx) => (
-          <div key={pageIdx} className="min-w-full h-full snap-start pt-[calc(3rem+env(safe-area-inset-top))] pb-[calc(11rem+env(safe-area-inset-bottom))] px-4 md:px-12 flex flex-col overflow-hidden">
-            <div className="grid grid-cols-4 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-6 gap-x-4 sm:gap-x-6 gap-y-6 sm:gap-y-8 md:gap-y-12 justify-items-center content-start max-w-5xl mx-auto w-full h-full">
+          <div 
+            key={pageIdx} 
+            className="min-w-full h-full snap-start flex flex-col items-center pt-[calc(3rem+env(safe-area-inset-top))] pb-[calc(8rem+env(safe-area-inset-bottom))]"
+          >
+            {/* Dynamic Grid Container */}
+            <div 
+                className="w-full max-w-[90vw] h-full grid justify-items-center content-start gap-4 transition-all duration-500 ease-out"
+                style={{ 
+                    gridTemplateColumns: `repeat(${layout.cols}, minmax(0, 1fr))`,
+                    gridTemplateRows: `repeat(${layout.rows}, minmax(0, 1fr))`,
+                    paddingTop: '20px' 
+                }}
+            >
               {pageApps.map(appId => (
                 <AppIcon key={appId} app={ALL_APPS[appId]} onClick={(e) => { e.stopPropagation(); launchApp(appId); }} isEditMode={isEditMode} canRemove={!ALL_APPS[appId].isSystem} onRemove={() => handleUninstall(appId)} />
               ))}
@@ -350,25 +477,32 @@ const App: React.FC = () => {
       </div>
 
       {/* Indicators */}
-      {pages.length > 1 && <div className="absolute bottom-[calc(10.5rem+env(safe-area-inset-bottom))] left-0 right-0 flex justify-center gap-2 z-40 pointer-events-none">{pages.map((_, i) => <div key={i} className={`w-2 h-2 rounded-full transition-all duration-300 ${currentPage === i ? 'bg-white scale-110 shadow-sm' : 'bg-white/30'}`} />)}</div>}
+      {pages.length > 1 && (
+        <div className="absolute bottom-[calc(9.5rem+env(safe-area-inset-bottom))] left-0 right-0 flex justify-center gap-2 z-40 pointer-events-none transition-all duration-300">
+            {pages.map((_, i) => <div key={i} className={`w-2 h-2 rounded-full transition-all duration-300 ${currentPage === i ? 'bg-white scale-110 shadow-sm' : 'bg-white/30'}`} />)}
+        </div>
+      )}
 
       {/* Search Pill */}
-      <div className="absolute bottom-[calc(8rem+env(safe-area-inset-bottom))] left-0 right-0 flex justify-center z-40 pointer-events-none">
+      <div className="absolute bottom-[calc(7.5rem+env(safe-area-inset-bottom))] left-0 right-0 flex justify-center z-40 pointer-events-none">
         <button onClick={() => setIsSearchOpen(true)} className="pointer-events-auto bg-white/10 hover:bg-white/20 backdrop-blur-xl border border-white/5 px-5 py-2 rounded-full flex items-center gap-2 transition-all active:scale-95 group shadow-lg shadow-black/20">
             <Search size={14} className="text-white/70 group-hover:text-white" /><span className="text-xs font-medium text-white/70 group-hover:text-white">Search</span>
         </button>
       </div>
 
       {/* Edit Mode */}
-      {isEditMode && <div className="absolute bottom-[calc(12rem+env(safe-area-inset-bottom))] left-0 right-0 text-center pointer-events-none animate-fade-in z-40"><span className="bg-black/40 backdrop-blur-md px-4 py-1.5 rounded-full text-xs font-bold text-white/90 border border-white/10 shadow-lg">Triple-click space to finish editing</span></div>}
+      {isEditMode && <div className="absolute bottom-[calc(11rem+env(safe-area-inset-bottom))] left-0 right-0 text-center pointer-events-none animate-fade-in z-40"><span className="bg-black/40 backdrop-blur-md px-4 py-1.5 rounded-full text-xs font-bold text-white/90 border border-white/10 shadow-lg">Triple-click space to finish editing</span></div>}
 
       {/* Fixed Dock */}
-      <div className="absolute bottom-[calc(1.5rem+env(safe-area-inset-bottom))] left-1/2 -translate-x-1/2 z-40 transition-transform duration-300">
-        <div className="flex items-center gap-4 px-5 py-4 bg-white/10 backdrop-blur-3xl border border-white/20 rounded-[2.5rem] shadow-2xl shadow-black/60 transition-all duration-500 hover:scale-[1.02] hover:bg-white/15">
+      <div className="absolute bottom-[calc(1.5rem+env(safe-area-inset-bottom))] left-1/2 -translate-x-1/2 z-40 transition-all duration-300 w-auto max-w-[95vw]">
+        <div 
+            className="flex items-center gap-2 sm:gap-4 px-3 sm:px-5 py-3 sm:py-4 bg-white/10 backdrop-blur-3xl border border-white/20 rounded-[2rem] sm:rounded-[2.5rem] shadow-2xl shadow-black/60 transition-all duration-500 hover:scale-[1.02] hover:bg-white/15"
+            style={{ transform: layout.isLandscape && window.innerHeight < 500 ? 'scale(0.8) translateY(10px)' : 'scale(1)' }}
+        >
           {[AppID.DRAMA, AppID.SELL_IT, AppID.LYRICS_AI, AppID.CAPTIONS].map(id => (
-             <div key={id} className="relative group">
-                 <AppIcon app={ALL_APPS[id]} size="md" showLabel={false} onClick={() => launchApp(id)} isEditMode={isEditMode} canRemove={false} />
-                 {openApps.includes(id) && <div className="absolute -bottom-2.5 left-1/2 -translate-x-1/2 w-1 h-1 rounded-full bg-white/90 shadow-sm" />}
+             <div key={id} className="relative group shrink-0">
+                 <AppIcon app={ALL_APPS[id]} size={layout.cols < 4 ? "sm" : "md"} showLabel={false} onClick={() => launchApp(id)} isEditMode={isEditMode} canRemove={false} />
+                 {openApps.includes(id) && <div className="absolute -bottom-2 sm:-bottom-2.5 left-1/2 -translate-x-1/2 w-1 h-1 rounded-full bg-white/90 shadow-sm" />}
              </div>
           ))}
         </div>
