@@ -1,4 +1,3 @@
-
 import { useEffect, useRef, useCallback } from 'react';
 import { systemCore } from '../services/systemCore';
 
@@ -51,10 +50,11 @@ export const useSystemIntelligence = (appId: string, contentId?: string, content
       startTimeRef.current = null;
   }, [contentId]);
 
-  // --- Action Wrappers ---
+  // --- Action Wrappers (Non-Blocking) ---
 
   const trackCopy = useCallback((text: string) => {
-    systemCore.trackInteraction(appId, 'copy', { text });
+    // Fire and forget
+    systemCore.trackInteraction(appId, 'copy', { textLength: text.length });
     navigator.clipboard.writeText(text);
   }, [appId]);
 
@@ -64,12 +64,23 @@ export const useSystemIntelligence = (appId: string, contentId?: string, content
 
   const trackEdit = useCallback((original: string, final: string) => {
     if (original !== final) {
-        systemCore.trackInteraction(appId, 'edit', { original, final });
+        systemCore.trackInteraction(appId, 'edit', { 
+            originalLength: original.length, 
+            finalLength: final.length 
+        });
     }
   }, [appId]);
 
+  const trackGenerate = useCallback(() => {
+      systemCore.trackInteraction(appId, 'generate');
+  }, [appId]);
+
+  const trackError = useCallback((errorMsg: string) => {
+      systemCore.trackInteraction(appId, 'error', { message: errorMsg });
+  }, [appId]);
+
   const trackAction = useCallback((actionName: string) => {
-      // Generic tracker for clicks/toggles
+      // Generic tracker for clicks/toggles, mapped to 'sys_event' or 'open' based on context
       systemCore.trackInteraction(appId, 'open', { label: actionName });
   }, [appId]);
 
@@ -78,6 +89,8 @@ export const useSystemIntelligence = (appId: string, contentId?: string, content
     trackCopy,
     trackDownload,
     trackEdit,
+    trackGenerate,
+    trackError,
     trackAction
   };
 };

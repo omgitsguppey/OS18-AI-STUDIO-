@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useRef, Suspense, memo, useMemo } from 'react';
 import { ALL_APPS, INITIAL_INSTALLED_APPS, WALLPAPERS } from '../constants';
 import { AppID, AppConfig } from '../types';
@@ -7,38 +6,40 @@ import Window from '../components/Window';
 import { Wifi, Battery, Search, Loader2 } from 'lucide-react';
 import { systemCore } from '../services/systemCore';
 import { storage, STORES } from '../services/storageService';
+import { authService } from '../services/authService';
+import { User } from 'firebase/auth';
 
-// --- LAZY LOADED APPS (Code Splitting) ---
-const Calculator = React.lazy(() => import('./apps/Calculator'));
-const AppStore = React.lazy(() => import('./apps/AppStore'));
-const TipsApp = React.lazy(() => import('./apps/TipsApp'));
-const SettingsApp = React.lazy(() => import('./apps/SettingsApp'));
-const DramaTracker = React.lazy(() => import('./apps/DramaTracker'));
-const JustSellIt = React.lazy(() => import('./apps/JustSellIt'));
-const LyricsAI = React.lazy(() => import('./apps/LyricsAI'));
-const AlbumsAI = React.lazy(() => import('./apps/AlbumsAI'));
-const LinkFlipper = React.lazy(() => import('./apps/LinkFlipper'));
-const CaptionsAI = React.lazy(() => import('./apps/CaptionsAI'));
-const PasswordsApp = React.lazy(() => import('./apps/PasswordsApp'));
-const MarkupAI = React.lazy(() => import('./apps/MarkupAI'));
-const ConvertAI = React.lazy(() => import('./apps/ConvertAI'));
-const ContentAI = React.lazy(() => import('./apps/ContentAI'));
-const AnalyticsAI = React.lazy(() => import('./apps/AnalyticsAI'));
-const CareerAI = React.lazy(() => import('./apps/CareerAI'));
-const TrendsAI = React.lazy(() => import('./apps/TrendsAI'));
-const WallpaperAI = React.lazy(() => import('./apps/WallpaperAI'));
-const GetFamous = React.lazy(() => import('./apps/GetFamous'));
-const PriorityAI = React.lazy(() => import('./apps/PriorityAI'));
-const BrandKitAI = React.lazy(() => import('./apps/BrandKitAI'));
-const ViralPlanAI = React.lazy(() => import('./apps/ViralPlanAI'));
-const AIPlayground = React.lazy(() => import('./apps/AIPlayground'));
-const PlaylistAI = React.lazy(() => import('./apps/PlaylistAI'));
-const Achievements = React.lazy(() => import('./apps/Achievements'));
-const NSFWAI = React.lazy(() => import('./apps/NSFWAI'));
-const TrapAI = React.lazy(() => import('./apps/TrapAI'));
-const OperatorAI = React.lazy(() => import('./apps/OperatorAI'));
-const SpeechAI = React.lazy(() => import('./apps/SpeechAI'));
-const ShortsStudio = React.lazy(() => import('./apps/ShortsStudio'));
+// --- LAZY LOADED APPS (Sibling Imports) ---
+const Calculator = React.lazy(() => import('./Calculator'));
+const AppStore = React.lazy(() => import('./AppStore'));
+const TipsApp = React.lazy(() => import('./TipsApp'));
+const SettingsApp = React.lazy(() => import('./SettingsApp'));
+const DramaTracker = React.lazy(() => import('./DramaTracker'));
+const JustSellIt = React.lazy(() => import('./JustSellIt'));
+const LyricsAI = React.lazy(() => import('./LyricsAI'));
+const AlbumsAI = React.lazy(() => import('./AlbumsAI'));
+const LinkFlipper = React.lazy(() => import('./LinkFlipper'));
+const CaptionsAI = React.lazy(() => import('./CaptionsAI'));
+const PasswordsApp = React.lazy(() => import('./PasswordsApp'));
+const MarkupAI = React.lazy(() => import('./MarkupAI'));
+const ConvertAI = React.lazy(() => import('./ConvertAI'));
+const ContentAI = React.lazy(() => import('./ContentAI'));
+const AnalyticsAI = React.lazy(() => import('./AnalyticsAI'));
+const CareerAI = React.lazy(() => import('./CareerAI'));
+const TrendsAI = React.lazy(() => import('./TrendsAI'));
+const WallpaperAI = React.lazy(() => import('./WallpaperAI'));
+const GetFamous = React.lazy(() => import('./GetFamous'));
+const PriorityAI = React.lazy(() => import('./PriorityAI'));
+const BrandKitAI = React.lazy(() => import('./BrandKitAI'));
+const ViralPlanAI = React.lazy(() => import('./ViralPlanAI'));
+const AIPlayground = React.lazy(() => import('./AIPlayground'));
+const PlaylistAI = React.lazy(() => import('./PlaylistAI'));
+const Achievements = React.lazy(() => import('./Achievements'));
+const NSFWAI = React.lazy(() => import('./NSFWAI'));
+const TrapAI = React.lazy(() => import('./TrapAI'));
+const OperatorAI = React.lazy(() => import('./OperatorAI'));
+const SpeechAI = React.lazy(() => import('./SpeechAI'));
+const ShortsStudio = React.lazy(() => import('./ShortsStudio'));
 
 const LoadingFallback = () => (
   <div className="h-full flex items-center justify-center bg-[#1c1c1e] text-white">
@@ -46,7 +47,7 @@ const LoadingFallback = () => (
   </div>
 );
 
-// Isolated Status Bar to prevent parent re-renders on clock tick
+// Isolated Status Bar
 const StatusBar = memo(() => {
   const [time, setTime] = useState(new Date());
   useEffect(() => {
@@ -66,6 +67,11 @@ const StatusBar = memo(() => {
 });
 
 const App: React.FC = () => {
+  // --- AUTHENTICATION STATE ---
+  const [user, setUser] = useState<User | null>(null);
+  const [loadingAuth, setLoadingAuth] = useState(true);
+
+  // --- OS STATE ---
   const [installedApps, setInstalledApps] = useState<AppID[]>(INITIAL_INSTALLED_APPS);
   const [openApps, setOpenApps] = useState<AppID[]>([]);
   const [activeApp, setActiveApp] = useState<AppID | null>(null);
@@ -83,6 +89,7 @@ const App: React.FC = () => {
   const [reducedMotion, setReducedMotion] = useState(false);
   const [nightShift, setNightShift] = useState(false);
   const [showFPS, setShowFPS] = useState(false);
+  const [wallpaperDimming, setWallpaperDimming] = useState(false);
   
   // Responsive Layout State
   const [layout, setLayout] = useState({ cols: 4, rows: 5, maxApps: 20, isLandscape: false });
@@ -95,7 +102,19 @@ const App: React.FC = () => {
   const scrollRef = useRef<HTMLDivElement>(null);
   const activeAppStartTimeRef = useRef<number>(0);
 
-  // Dynamic Layout Calculation
+  // --- AUTH LISTENER ---
+  useEffect(() => {
+    const unsubscribe = authService.onUserChange((u) => {
+      setUser(u);
+      setLoadingAuth(false);
+      if (u && authService.isAdmin(u)) {
+        console.log("Welcome back, Administrator Johnson.");
+      }
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // --- LAYOUT & SYSTEM INIT ---
   useEffect(() => {
     const calculateLayout = () => {
         const width = window.innerWidth;
@@ -103,7 +122,7 @@ const App: React.FC = () => {
         const isLandscape = width > height;
 
         const TOP_RESERVE = 60;
-        const BOTTOM_RESERVE = isLandscape && height < 500 ? 110 : 150; 
+        const BOTTOM_RESERVE = isLandscape && height < 500 ? 140 : 200; 
 
         const availableW = width - 40; 
         const availableH = height - TOP_RESERVE - BOTTOM_RESERVE;
@@ -132,20 +151,19 @@ const App: React.FC = () => {
 
   // --- NEURAL BACKEND INITIALIZATION & LISTENERS ---
   useEffect(() => {
+    if (!user) return; 
+
     systemCore.init().catch(console.error);
     
-    // Global Event Listener for "The Algorithm"
     const handleGlobalClick = (e: MouseEvent) => {
         const target = e.target as HTMLElement;
         const label = target.innerText || target.getAttribute('aria-label') || target.tagName;
-        // Don't track clicks inside the backend terminal itself to avoid loops
         if (!target.closest('.font-mono')) {
             systemCore.trackRawEvent('click', label.substring(0, 30));
         }
     };
 
     const handleGlobalKey = (e: KeyboardEvent) => {
-        // Track general typing activity (not content)
         systemCore.trackRawEvent('keypress', 'Input Activity');
     };
 
@@ -162,6 +180,7 @@ const App: React.FC = () => {
             setReducedMotion(savedSettings.reducedMotion || false);
             setNightShift(savedSettings.nightShift || false);
             setShowFPS(savedSettings.showFPS || false);
+            setWallpaperDimming(savedSettings.wallpaperDimming || false);
             
             document.documentElement.style.setProperty('--text-scale', savedSettings.textSize?.toString() || '1');
             if (savedSettings.boldText) document.body.classList.add('font-bold');
@@ -174,13 +193,13 @@ const App: React.FC = () => {
     };
     loadSettings();
 
-    // Listen for changes from SettingsApp
     const handleSettingsUpdate = (e: Event) => {
         const s = (e as CustomEvent).detail;
         if (s.dimLevel !== undefined) setDimLevel(s.dimLevel);
         if (s.reducedMotion !== undefined) setReducedMotion(s.reducedMotion);
         if (s.nightShift !== undefined) setNightShift(s.nightShift);
         if (s.showFPS !== undefined) setShowFPS(s.showFPS);
+        if (s.wallpaperDimming !== undefined) setWallpaperDimming(s.wallpaperDimming);
         if (s.textSize !== undefined) document.documentElement.style.setProperty('--text-scale', s.textSize.toString());
         if (s.boldText !== undefined) {
              if (s.boldText) document.body.classList.add('font-bold');
@@ -200,7 +219,7 @@ const App: React.FC = () => {
         window.removeEventListener('sys_settings_update', handleSettingsUpdate);
         window.removeEventListener('system_settings_change', handleSettingsUpdate);
     };
-  }, []);
+  }, [user]);
 
   // FPS Loop
   useEffect(() => {
@@ -289,15 +308,23 @@ const App: React.FC = () => {
   };
 
   const renderAppContent = (id: AppID) => {
-    // Suspense Wrapper ensures lazy loading
     return (
       <Suspense fallback={<LoadingFallback />}>
         {(() => {
             switch (id) {
             case AppID.CALCULATOR: return <Calculator />;
-            case AppID.STORE: return <AppStore installedApps={installedApps} onInstall={handleInstall} />;
+            case AppID.STORE: return <AppStore installedApps={installedApps} onInstall={handleInstall} onLaunch={launchApp} />;
             case AppID.TIPS: return <TipsApp />;
-            case AppID.SETTINGS: return <SettingsApp currentWallpaperId={wallpaperId} onWallpaperChange={setWallpaperId} />;
+            
+            case AppID.SETTINGS: return (
+                <SettingsApp 
+                    currentWallpaperId={wallpaperId} 
+                    onWallpaperChange={setWallpaperId}
+                    installedApps={installedApps}
+                    onUninstall={handleUninstall} 
+                />
+            );
+            
             case AppID.DRAMA: return <DramaTracker onNavigate={(toId: AppID) => navigateToApp(AppID.DRAMA, toId)} />;
             case AppID.SELL_IT: return <JustSellIt />;
             case AppID.LYRICS_AI: return <LyricsAI />;
@@ -344,6 +371,42 @@ const App: React.FC = () => {
   const currentWallpaper = WALLPAPERS.find(w => w.id === wallpaperId) || WALLPAPERS[0];
   const filteredApps = (Object.values(ALL_APPS) as AppConfig[]).filter(app => installedApps.includes(app.id) && (app.name.toLowerCase().includes(searchQuery.toLowerCase()) || app.description.toLowerCase().includes(searchQuery.toLowerCase()))).sort((a, b) => a.name.localeCompare(b.name));
 
+  // --- LOGIN SCREEN RENDER ---
+  if (loadingAuth) {
+    return <div className="bg-black h-screen w-screen flex items-center justify-center text-white"><Loader2 className="animate-spin" /></div>;
+  }
+
+  if (!user) {
+    return (
+      <div className="h-screen w-screen bg-black flex flex-col items-center justify-center text-white space-y-8 relative overflow-hidden">
+        {/* Background Ambient */}
+        <div className="absolute inset-0 bg-gradient-to-tr from-blue-900/20 via-purple-900/20 to-black pointer-events-none" />
+        
+        <div className="z-10 text-center space-y-2">
+            <h1 className="text-6xl font-bold tracking-tighter bg-gradient-to-r from-blue-400 to-purple-400 bg-clip-text text-transparent">OS 18</h1>
+            <p className="text-white/50 text-sm tracking-widest uppercase">Web Experience</p>
+        </div>
+
+        <button 
+            onClick={() => authService.login()}
+            className="z-10 flex items-center gap-3 px-8 py-4 bg-white text-black rounded-full font-bold hover:scale-105 active:scale-95 transition-all shadow-xl shadow-white/10"
+        >
+            {/* Google G Icon */}
+            <svg viewBox="0 0 24 24" className="w-5 h-5" xmlns="http://www.w3.org/2000/svg">
+              <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
+              <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
+              <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/>
+              <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
+            </svg>
+            Sign in with Google
+        </button>
+
+        <p className="absolute bottom-10 text-xs text-white/20">Authorized Personnel Only</p>
+      </div>
+    );
+  }
+
+  // --- MAIN OS RENDER ---
   return (
     <div 
       className="relative w-screen h-[100dvh] overflow-hidden text-white font-sans selection:bg-blue-500/30 transition-all duration-700 ease-in-out" 
@@ -355,13 +418,11 @@ const App: React.FC = () => {
           <div className="absolute inset-0 bg-orange-500/20 pointer-events-none z-[9999] mix-blend-multiply" />
       )}
       
-      {/* 2. Dimming */}
-      {dimLevel > 0 && (
-          <div 
-            className="absolute inset-0 bg-black pointer-events-none transition-opacity duration-300 z-0"
-            style={{ opacity: dimLevel / 100 }} 
-          />
-      )}
+      {/* 2. Dimming & Wallpaper Dimming */}
+      <div 
+        className="absolute inset-0 bg-black pointer-events-none transition-opacity duration-300 z-0"
+        style={{ opacity: (dimLevel / 100) + (wallpaperDimming ? 0.3 : 0) }} 
+      />
 
       {/* 3. FPS Counter */}
       {showFPS && (
@@ -439,8 +500,8 @@ const App: React.FC = () => {
       {/* Edit Mode */}
       {isEditMode && <div className="absolute bottom-[calc(11rem+env(safe-area-inset-bottom))] left-0 right-0 text-center pointer-events-none animate-fade-in z-40"><span className="bg-black/40 backdrop-blur-md px-4 py-1.5 rounded-full text-xs font-bold text-white/90 border border-white/10 shadow-lg">Triple-click space to finish editing</span></div>}
 
-      {/* Fixed Dock */}
-      <div className="absolute bottom-[calc(1.5rem+env(safe-area-inset-bottom))] left-1/2 -translate-x-1/2 z-40 transition-all duration-300 w-auto max-w-[95vw]">
+      {/* Fixed Dock - Bumped Z-Index to 50 */}
+      <div className="absolute bottom-[calc(1.5rem+env(safe-area-inset-bottom))] left-1/2 -translate-x-1/2 z-50 transition-all duration-300 w-auto max-w-[95vw]">
         <div 
             className="flex items-center gap-2 sm:gap-4 px-3 sm:px-5 py-3 sm:py-4 bg-white/10 backdrop-blur-3xl border border-white/20 rounded-[2rem] sm:rounded-[2.5rem] shadow-2xl shadow-black/60 transition-all duration-500 hover:scale-[1.02] hover:bg-white/15"
             style={{ transform: layout.isLandscape && window.innerHeight < 500 ? 'scale(0.8) translateY(10px)' : 'scale(1)' }}
@@ -475,6 +536,7 @@ const App: React.FC = () => {
         /* Dynamic Font Scaling */
         :root {
             font-size: calc(16px * var(--text-scale, 1));
+            --app-safe-lift: 15px; /* Global Safe Area Lift */
         }
         
         /* Debug Borders */

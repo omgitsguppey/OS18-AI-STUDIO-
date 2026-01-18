@@ -1,10 +1,10 @@
-
 import { storage, STORES } from './storageService';
 import { AppID } from '../types';
 
 /**
- * SYSTEM INTELLIGENCE LAYER (v2.2)
+ * SYSTEM INTELLIGENCE LAYER (v3.0 - Phase 0 Refined)
  * Neural Backend Algorithm for Pattern Recognition & Telemetry.
+ * Local-First Architecture for Zero Latency.
  */
 
 type MemoryScope = 'Global' | 'Creative' | 'Business' | 'Utility';
@@ -27,7 +27,7 @@ export interface Insight {
 
 interface InteractionEvent {
   appId: string;
-  action: 'open' | 'generate' | 'regenerate' | 'edit' | 'copy' | 'download' | 'dwell' | 'abandon' | 'success' | 'dislike' | 'completion' | 'error' | 'sys_event';
+  action: 'open' | 'generate' | 'regenerate' | 'edit' | 'copy' | 'download' | 'dwell' | 'abandon' | 'success' | 'dislike' | 'completion' | 'error' | 'sys_event' | 'install_app' | 'open_app';
   timestamp: number;
   metadata?: any;
   score: number;
@@ -47,6 +47,12 @@ interface SystemState {
   totalInputChars: number;
   totalOutputChars: number;
   requestCount: number;
+  
+  // Phase 0: Centralized Credits
+  credits: {
+      count: number;
+      lastReset: string; // DateString
+  };
 }
 
 const DEFAULT_STATE: SystemState = {
@@ -62,7 +68,11 @@ const DEFAULT_STATE: SystemState = {
   lastGenerationTimestamp: 0,
   totalInputChars: 0,
   totalOutputChars: 0,
-  requestCount: 0
+  requestCount: 0,
+  credits: {
+      count: 20, // Default daily limit
+      lastReset: new Date().toDateString()
+  }
 };
 
 // Heuristic Value Assessment (HVA) Scoring Matrix
@@ -80,7 +90,8 @@ const SCORES = {
   SUCCESS: 25,
   DISLIKE: -10,
   COMPLETION: 5,
-  ERROR: -5
+  ERROR: -5,
+  INSTALL: 15
 };
 
 class SystemCoreService {
@@ -91,34 +102,37 @@ class SystemCoreService {
 
   async init() {
     if (this.isInitialized) return;
-    const saved = await storage.get<SystemState>(STORES.SYSTEM_MEMORY, 'core_state_v2');
+    const saved = await storage.get<SystemState>(STORES.SYSTEM_MEMORY, 'core_state_v3');
     const lpMode = await storage.get<boolean>(STORES.SYSTEM, 'low_power_mode');
     
     if (saved) {
       this.state = { ...DEFAULT_STATE, ...saved };
+      // Check Credit Reset on Init
+      const today = new Date().toDateString();
+      if (this.state.credits.lastReset !== today) {
+          this.state.credits = { count: 20, lastReset: today };
+          this.saveState();
+      }
     }
+    
     if (typeof lpMode === 'boolean') {
         this.lowPowerMode = lpMode;
     }
     this.isInitialized = true;
     
     // Background Consolidation Loop
-    // In Low Power Mode, we run this much less frequently.
     const interval = this.lowPowerMode ? 120000 : 10000; // 10s default
 
-    if (typeof window !== 'undefined' && 'requestIdleCallback' in window) {
-       // @ts-ignore
-       setInterval(() => window.requestIdleCallback(() => this.runBackgroundConsolidation()), interval);
-    } else {
-       setInterval(() => this.runBackgroundConsolidation(), interval);
-    }
-
     if (typeof window !== 'undefined') {
-        window.addEventListener('beforeunload', () => this.handleUnload());
+       // @ts-ignore
+       const idleCallback = window.requestIdleCallback || ((cb) => setTimeout(cb, 1));
+       setInterval(() => idleCallback(() => this.runBackgroundConsolidation()), interval);
+       
+       window.addEventListener('beforeunload', () => this.handleUnload());
     }
   }
 
-  // --- 1. CORE TRACKING API ---
+  // --- 1. CORE TRACKING API (NON-BLOCKING) ---
 
   async trackInteraction(
     appId: string, 
@@ -128,79 +142,91 @@ class SystemCoreService {
     if (!this.isInitialized) await this.init();
     if (!this.state.telemetryEnabled && action === 'sys_event') return;
 
-    const now = Date.now();
-    let score = 0;
+    // Run calculation in next tick to avoid blocking UI
+    setTimeout(() => {
+        const now = Date.now();
+        let score = 0;
 
-    // --- Scoring Logic ---
-    if (action === 'regenerate') {
-        const timeDelta = now - this.state.lastGenerationTimestamp;
-        if (timeDelta < 5000) { 
-            score = SCORES.REGENERATE_FAST;
-            // Switching prompting strategy if user is spamming regenerate
-            this.state.activePromptVariant = this.state.activePromptVariant === 'A' ? 'B' : 'A';
-        } else {
-            score = SCORES.REGENERATE_SLOW;
+        // --- Scoring Logic (Local Heuristics) ---
+        if (action === 'regenerate') {
+            const timeDelta = now - this.state.lastGenerationTimestamp;
+            if (timeDelta < 5000) { 
+                score = SCORES.REGENERATE_FAST;
+                this.state.activePromptVariant = this.state.activePromptVariant === 'A' ? 'B' : 'A';
+            } else {
+                score = SCORES.REGENERATE_SLOW;
+            }
+        } else if (action === 'generate') {
+            this.state.lastGenerationTimestamp = now;
         }
-    } else if (action === 'generate') {
-        this.state.lastGenerationTimestamp = now;
-    }
 
-    if (action === 'dwell') {
-        score = (metadata?.duration || 0) > 5 ? SCORES.DWELL_LONG : SCORES.DWELL_SHORT;
-    }
-
-    if (action === 'edit' && metadata?.original && metadata?.final) {
-        // If edit distance is small, it's a refinement (good).
-        if (Math.abs(metadata.original.length - metadata.final.length) < 20) {
-            score = SCORES.EDIT;
+        if (action === 'dwell') {
+            score = (metadata?.duration || 0) > 5 ? SCORES.DWELL_LONG : SCORES.DWELL_SHORT;
         }
-    }
 
-    if (action === 'copy') score = SCORES.COPY;
-    if (action === 'download') score = SCORES.DOWNLOAD;
-    if (action === 'success') score = SCORES.SUCCESS;
-    if (action === 'dislike') score = SCORES.DISLIKE;
-    
-    if (action === 'completion') {
-        score = SCORES.COMPLETION;
-        this.state.requestCount++;
-        this.state.totalInputChars += (metadata?.inputLength || 0);
-        this.state.totalOutputChars += (metadata?.outputLength || 0);
-    }
-    
-    if (action === 'error') score = SCORES.ERROR;
+        if (action === 'edit' && metadata?.original && metadata?.final) {
+            if (Math.abs(metadata.original.length - metadata.final.length) < 20) {
+                score = SCORES.EDIT;
+            }
+        }
 
-    const event: InteractionEvent = { appId, action, timestamp: now, metadata, score };
-    this.eventBuffer.push(event);
-    this.state.sessionScore += score;
+        if (action === 'copy') score = SCORES.COPY;
+        if (action === 'download') score = SCORES.DOWNLOAD;
+        if (action === 'success') score = SCORES.SUCCESS;
+        if (action === 'dislike') score = SCORES.DISLIKE;
+        if (action === 'install_app') score = SCORES.INSTALL;
+        
+        if (action === 'completion') {
+            score = SCORES.COMPLETION;
+            this.state.requestCount++;
+            this.state.totalInputChars += (metadata?.inputLength || 0);
+            this.state.totalOutputChars += (metadata?.outputLength || 0);
+        }
+        
+        if (action === 'error') score = SCORES.ERROR;
 
-    // Buffer cap to prevent memory leaks during long sessions
-    if (this.eventBuffer.length > 500) {
-        this.eventBuffer = this.eventBuffer.slice(-250);
-    }
+        const event: InteractionEvent = { appId, action, timestamp: now, metadata, score };
+        this.eventBuffer.push(event);
+        this.state.sessionScore += score;
 
-    // Persist critical state periodically
-    if (score >= 10 && !this.lowPowerMode) {
-        this.saveState();
-    }
+        // Buffer cap
+        if (this.eventBuffer.length > 500) {
+            this.eventBuffer = this.eventBuffer.slice(-250);
+        }
+
+        // Persist critical state periodically
+        if (score >= 10 && !this.lowPowerMode) {
+            this.saveState();
+        }
+    }, 0);
   }
 
   // Public API for Raw DOM Events
   trackRawEvent(type: 'click' | 'keypress' | 'scroll', label: string) {
       if (!this.state.telemetryEnabled) return;
-      
-      // Sanitization: Truncate and genericize to prevent PII logging
       const cleanLabel = label.length > 40 ? label.substring(0, 40) + '...' : label;
-      
       this.trackInteraction('SYSTEM', 'sys_event', { type, label: cleanLabel });
   }
 
-  // --- 2. LEARNING & DREAMING (ALGORITHM LAYER) ---
+  // --- 2. CREDIT SYSTEM (Centralized) ---
+  
+  getCredits(): number {
+      return this.state.credits.count;
+  }
+
+  async useCredit(amount = 1): Promise<boolean> {
+      if (this.state.credits.count < amount) return false;
+      this.state.credits.count -= amount;
+      await this.saveState();
+      return true;
+  }
+
+  // --- 3. LEARNING & DREAMING (ALGORITHM LAYER) ---
 
   private async runBackgroundConsolidation() {
       if (this.eventBuffer.length === 0) return;
 
-      this.analyzePatterns();
+      this.analyzePatterns(); // Run local math
 
       // Determine Top App
       const appCounts: Record<string, number> = {};
@@ -213,8 +239,7 @@ class SystemCoreService {
       const apps = Object.keys(appCounts);
       if (apps.length > 0) {
         const topApp = apps.reduce((a, b) => appCounts[a] > appCounts[b] ? a : b);
-        if (appCounts[topApp] > 5) {
-            // Implicitly learn preference
+        if (appCounts[topApp] > 10) { // Increased threshold
             this.addFact(`Frequent user of ${topApp}`, 'Global', 0.8, 'dwell');
         }
       }
@@ -291,7 +316,7 @@ class SystemCoreService {
       }
   }
 
-  // --- 3. PROMPT ENGINEERING & CONTEXT ---
+  // --- 4. PROMPT ENGINEERING & CONTEXT ---
 
   getTimeContext(): string {
       const hour = new Date().getHours();
@@ -337,7 +362,7 @@ class SystemCoreService {
   }
 
   private saveState() {
-    storage.set(STORES.SYSTEM_MEMORY, 'core_state_v2', this.state).catch(console.error);
+    storage.set(STORES.SYSTEM_MEMORY, 'core_state_v3', this.state).catch(console.error);
   }
 
   // --- PUBLIC API FOR SETTINGS APP ---
@@ -358,7 +383,8 @@ class SystemCoreService {
           savings: Math.round(this.state.sessionScore * 12),
           totalTokens: Math.round((this.state.totalInputChars + this.state.totalOutputChars) / 4),
           telemetryEnabled: this.state.telemetryEnabled,
-          insights: this.state.insights
+          insights: this.state.insights,
+          credits: this.state.credits.count // Exposed for UI
       };
   }
 

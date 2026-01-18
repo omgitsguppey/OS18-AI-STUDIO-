@@ -1,9 +1,9 @@
-import React, { useState, useEffect, useCallback, memo } from 'react';
+import React, { useState, useEffect, useCallback, memo, useRef } from 'react';
 import { 
   Bell, Volume2, Moon, Settings as SettingsIcon, Type, 
   LayoutGrid, Activity, Hand, ChevronRight, 
   ArrowLeft, Brain, Terminal,
-  Radio, Shield, Trash2, User as UserIcon, LogOut,
+  Radio, Shield, User as UserIcon,
   Database, Zap, Hammer,
   Sun, Server, Play, Check, Eye, Mic, Battery
 } from 'lucide-react';
@@ -13,7 +13,7 @@ import { consoleService, LogEntry } from '../services/consoleService';
 import { authService } from '../services/authService';
 import { auth } from '../services/firebaseConfig';
 import { onAuthStateChanged, User } from 'firebase/auth';
-import { AppID, AppConfig } from '../types';
+import { AppID } from '../types';
 import { ALL_APPS, WALLPAPERS } from '../constants';
 
 // --- Types & Defaults ---
@@ -122,7 +122,7 @@ const ListItem = memo(({
 }: any) => (
   <div 
     onClick={onClick}
-    className={`flex items-center justify-between px-4 py-3 min-h-[48px] bg-white dark:bg-[#1C1C1E] active:bg-gray-100 dark:active:bg-[#2C2C2E] transition-colors ${onClick || isLink ? 'cursor-pointer' : ''}`}
+    className={`flex items-center justify-between px-4 py-3 min-h-[44px] bg-white dark:bg-[#1C1C1E] active:bg-gray-100 dark:active:bg-[#2C2C2E] transition-colors ${onClick || isLink ? 'cursor-pointer' : ''}`}
   >
     <div className="flex items-center gap-3 min-w-0">
       {Icon && (
@@ -148,7 +148,7 @@ const ListItem = memo(({
 const ListGroup = ({ title, footer, children }: any) => (
   <div className="mb-6">
     {title && <h3 className="px-4 mb-2 text-[13px] text-gray-500 uppercase font-medium ml-4">{title}</h3>}
-    <div className="mx-4 overflow-hidden rounded-[12px] divide-y divide-gray-200 dark:divide-white/10 border border-gray-200 dark:border-transparent">
+    <div className="mx-4 overflow-hidden rounded-[10px] divide-y divide-gray-200 dark:divide-white/10 border border-gray-200 dark:border-transparent">
       {children}
     </div>
     {footer && <p className="px-4 mt-2 text-[13px] text-gray-500 leading-normal ml-4">{footer}</p>}
@@ -241,7 +241,29 @@ const MainView = ({ user, isAdmin, sysMetrics, pushView }: any) => (
 );
 
 const WallpaperView = ({ settings, updateSetting, currentWallpaperId, onWallpaperChange }: any) => {
-    const currentWp = WALLPAPERS.find(w => w.id === currentWallpaperId);
+    // --- Phase 0: Integrated User Wallpapers ---
+    const [userWallpapers, setUserWallpapers] = useState<any[]>([]);
+
+    useEffect(() => {
+        const loadUserWallpapers = async () => {
+            // Fetch from the new dedicated store
+            const papers = await storage.getAll<any>(STORES.WALLPAPERS);
+            setUserWallpapers(papers.sort((a, b) => b.createdAt - a.createdAt)); // Newest first
+        };
+        loadUserWallpapers();
+
+        // Listen for new saves
+        const handleNewWallpaper = (e: any) => {
+            const newWp = e.detail;
+            setUserWallpapers(prev => [newWp, ...prev]);
+        };
+        window.addEventListener('sys_wallpaper_added', handleNewWallpaper);
+        return () => window.removeEventListener('sys_wallpaper_added', handleNewWallpaper);
+    }, []);
+
+    // Merge built-in wallpapers with user creations
+    const allWallpapers = [...userWallpapers, ...WALLPAPERS]; 
+    const currentWp = allWallpapers.find(w => w.id === currentWallpaperId) || WALLPAPERS[0];
 
     return (
         <div className="animate-slide-up pb-10 pt-6">
@@ -257,7 +279,6 @@ const WallpaperView = ({ settings, updateSetting, currentWallpaperId, onWallpape
                     <div className="absolute top-4 left-0 right-0 text-center text-white/90 font-medium text-lg drop-shadow-md">
                         9:41
                     </div>
-                    {/* Mock Icons */}
                     <div className="absolute bottom-8 left-4 right-4 flex justify-between px-2">
                         <div className="w-10 h-10 bg-white/20 backdrop-blur-md rounded-xl" />
                         <div className="w-10 h-10 bg-white/20 backdrop-blur-md rounded-xl" />
@@ -277,15 +298,19 @@ const WallpaperView = ({ settings, updateSetting, currentWallpaperId, onWallpape
             <div className="px-4">
                 <h3 className="px-4 mb-2 text-[13px] text-gray-500 uppercase font-medium">Collections</h3>
                 <div className="grid grid-cols-2 gap-4">
-                    {WALLPAPERS.map(wp => (
+                    {allWallpapers.map(wp => (
                         <button 
                             key={wp.id}
                             onClick={() => onWallpaperChange(wp.id)}
                             className={`relative aspect-[3/5] rounded-xl overflow-hidden border-2 transition-all ${currentWallpaperId === wp.id ? 'border-blue-500 scale-105' : 'border-transparent hover:scale-105'}`}
                         >
-                            <img src={wp.thumbnail} alt={wp.name} className="w-full h-full object-cover" />
+                            <div 
+                                className="w-full h-full bg-cover bg-center" 
+                                style={{ backgroundImage: wp.thumbnail.startsWith('data:') ? `url(${wp.thumbnail})` : `url(${wp.thumbnail})` }} 
+                            />
+                            {/* <img src={wp.thumbnail} alt={wp.name} className="w-full h-full object-cover" /> */}
                             <div className="absolute bottom-0 left-0 right-0 p-2 bg-gradient-to-t from-black/60 to-transparent">
-                                <span className="text-white text-xs font-medium">{wp.name}</span>
+                                <span className="text-white text-xs font-medium truncate block">{wp.name}</span>
                             </div>
                         </button>
                     ))}
@@ -593,6 +618,9 @@ const SettingsApp: React.FC<SettingsAppProps> = ({
   const [testResponse, setTestResponse] = useState('');
   const [isTestingAi, setIsTestingAi] = useState(false);
 
+  // Throttling for Logs
+  const logUpdateRef = useRef<number>(0);
+
   const currentView = viewStack[viewStack.length - 1];
 
   // 1. Auth Listener
@@ -623,12 +651,17 @@ const SettingsApp: React.FC<SettingsAppProps> = ({
     const poll = async () => {
       // 1. Metrics
       const m = systemCore.getMetrics();
+      // Only update state if metrics actually changed to avoid re-renders
       setSysMetrics(prev => JSON.stringify(prev) !== JSON.stringify(m) ? m : prev);
       
-      // 2. Events (Only for Backend View)
+      // 2. Events (Only for Backend View) - THROTTLED to once per 2s
       if (currentView === 'backend' && isAdmin) {
-          const events = systemCore.getRecentEvents(50);
-          setRecentEvents(prev => JSON.stringify(prev) !== JSON.stringify(events) ? events : prev);
+          const now = Date.now();
+          if (now - logUpdateRef.current > 2000) {
+              const events = systemCore.getRecentEvents(50);
+              setRecentEvents(events);
+              logUpdateRef.current = now;
+          }
       }
 
       // 3. Storage
@@ -639,7 +672,7 @@ const SettingsApp: React.FC<SettingsAppProps> = ({
       }
     };
 
-    const interval = setInterval(poll, currentView === 'backend' ? 1000 : 3000); 
+    const interval = setInterval(poll, currentView === 'backend' ? 500 : 3000); 
     poll(); // Initial call
 
     return () => clearInterval(interval);

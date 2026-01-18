@@ -1,7 +1,7 @@
 import { db, auth } from "./firebaseConfig";
 import { 
   collection, doc, getDoc, setDoc, deleteDoc, getDocs, 
-  writeBatch, query, where 
+  writeBatch, query, where, addDoc 
 } from "firebase/firestore";
 import { AppID } from "../types";
 
@@ -33,7 +33,8 @@ export const STORES = {
   SPEECH_AI: 'speech_ai_data',
   SHORTS_STUDIO: 'shorts_studio_data',
   SYSTEM_EVENTS: 'sys_telemetry_events', 
-  SYSTEM_MEMORY: 'sys_core_memory'       
+  SYSTEM_MEMORY: 'sys_core_memory',
+  WALLPAPERS: 'user_wallpapers_data' // NEW: Dedicated Wallpaper Store
 };
 
 export interface StoreStats {
@@ -67,17 +68,31 @@ class StorageService {
     return doc(db, "users", user.uid, storeName, key);
   }
 
+  // Save with specific Key
   async set(storeName: string, key: string, value: any): Promise<void> {
     if (!auth.currentUser) return; // Silent fail if offline/logged out
     try {
         const ref = this.getDocRef(storeName, key);
-        // We wrap primitive values in an object if needed, but usually we save objects
         // Adding timestamp for sorting
         const payload = { ...value, _updated: Date.now() };
         await setDoc(ref, payload);
     } catch (e) {
         console.error("Firestore Write Error", e);
     }
+  }
+
+  // Add new item (Auto-ID)
+  async add(storeName: string, value: any): Promise<string | null> {
+      if (!auth.currentUser) return null;
+      try {
+          const col = this.getCollectionRef(storeName);
+          const payload = { ...value, _created: Date.now() };
+          const ref = await addDoc(col, payload);
+          return ref.id;
+      } catch (e) {
+          console.error("Firestore Add Error", e);
+          return null;
+      }
   }
 
   // Fire-and-forget logging (Optimized)
@@ -87,7 +102,7 @@ class StorageService {
         const col = this.getCollectionRef(STORES.SYSTEM_EVENTS);
         // Use addDoc for auto-generated IDs
         // We don't await this strictly to keep UI fast
-        await setDoc(doc(col), { ...value, timestamp: Date.now() });
+        await addDoc(col, { ...value, timestamp: Date.now() });
     } catch (e) {
         // Suppress telemetry errors
     }
@@ -141,8 +156,9 @@ class StorageService {
     if (!auth.currentUser) return { name: storeName, count: 0, sizeBytes: 0 };
     
     // Firestore doesn't give size easily, so we estimate
+    // NOTE: In Production, replace getDocs with getCountFromServer() to save costs
     const col = this.getCollectionRef(storeName);
-    const snap = await getDocs(col); // CAUTION: This reads all docs. Expensive at scale.
+    const snap = await getDocs(col); 
     
     let size = 0;
     snap.docs.forEach(d => {

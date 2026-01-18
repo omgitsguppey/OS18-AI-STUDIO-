@@ -122,7 +122,8 @@ const App: React.FC = () => {
         const isLandscape = width > height;
 
         const TOP_RESERVE = 60;
-        const BOTTOM_RESERVE = isLandscape && height < 500 ? 110 : 150; 
+        // INCREASED RESERVE: Pushes grid higher to avoid overlapping with Search/Dock
+        const BOTTOM_RESERVE = isLandscape && height < 500 ? 140 : 200; 
 
         const availableW = width - 40; 
         const availableH = height - TOP_RESERVE - BOTTOM_RESERVE;
@@ -313,7 +314,9 @@ const App: React.FC = () => {
         {(() => {
             switch (id) {
             case AppID.CALCULATOR: return <Calculator />;
-            case AppID.STORE: return <AppStore installedApps={installedApps} onInstall={handleInstall} />;
+            case AppID.STORE: return <AppStore installedApps={installedApps} onInstall={handleInstall} onLaunch={function (id: AppID): void {
+                throw new Error('Function not implemented.');
+              } } />;
             case AppID.TIPS: return <TipsApp />;
             
             // --- UPDATED SETTINGS CALL ---
@@ -501,8 +504,8 @@ const App: React.FC = () => {
       {/* Edit Mode */}
       {isEditMode && <div className="absolute bottom-[calc(11rem+env(safe-area-inset-bottom))] left-0 right-0 text-center pointer-events-none animate-fade-in z-40"><span className="bg-black/40 backdrop-blur-md px-4 py-1.5 rounded-full text-xs font-bold text-white/90 border border-white/10 shadow-lg">Triple-click space to finish editing</span></div>}
 
-      {/* Fixed Dock */}
-      <div className="absolute bottom-[calc(1.5rem+env(safe-area-inset-bottom))] left-1/2 -translate-x-1/2 z-40 transition-all duration-300 w-auto max-w-[95vw]">
+      {/* Fixed Dock - Bumped Z-Index to 50 */}
+      <div className="absolute bottom-[calc(1.5rem+env(safe-area-inset-bottom))] left-1/2 -translate-x-1/2 z-50 transition-all duration-300 w-auto max-w-[95vw]">
         <div 
             className="flex items-center gap-2 sm:gap-4 px-3 sm:px-5 py-3 sm:py-4 bg-white/10 backdrop-blur-3xl border border-white/20 rounded-[2rem] sm:rounded-[2.5rem] shadow-2xl shadow-black/60 transition-all duration-500 hover:scale-[1.02] hover:bg-white/15"
             style={{ transform: layout.isLandscape && window.innerHeight < 500 ? 'scale(0.8) translateY(10px)' : 'scale(1)' }}
@@ -515,6 +518,15 @@ const App: React.FC = () => {
           ))}
         </div>
       </div>
+
+      {/* PHANTOM HOME BUTTON (Phase 0 Fix) */}
+      {/* Invisible but large touch area for easier exit */}
+      <div 
+        className="absolute bottom-0 left-1/2 -translate-x-1/2 w-64 h-12 z-[100] cursor-pointer"
+        onClick={() => {
+            if (activeApp) setActiveApp(null); // Force home interaction
+        }}
+      />
 
       {/* Windows Layer - With Reduced Motion Logic */}
       {openApps.map(appId => (
@@ -537,6 +549,7 @@ const App: React.FC = () => {
         /* Dynamic Font Scaling */
         :root {
             font-size: calc(16px * var(--text-scale, 1));
+            --app-safe-lift: 15px; /* Global Safe Area Lift */
         }
         
         /* Debug Borders */

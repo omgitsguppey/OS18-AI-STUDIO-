@@ -1,17 +1,18 @@
-
 import React, { useMemo, useState } from 'react';
 import { ALL_APPS } from '../constants';
 import { AppID } from '../types';
 import AppIcon from '../components/AppIcon';
-import { Download, Search } from 'lucide-react';
+import { Download, Search, ExternalLink } from 'lucide-react';
 import Fuse from 'fuse.js';
+import { systemCore } from '../services/systemCore';
 
 interface AppStoreProps {
   installedApps: AppID[];
   onInstall: (id: AppID) => void;
+  onLaunch: (id: AppID) => void; 
 }
 
-const AppStore: React.FC<AppStoreProps> = ({ installedApps, onInstall }) => {
+const AppStore: React.FC<AppStoreProps> = ({ installedApps, onInstall, onLaunch }) => {
   const [query, setQuery] = useState('');
 
   const fuse = useMemo(() => new Fuse(Object.values(ALL_APPS).filter(a => a.id !== AppID.STORE), {
@@ -24,6 +25,18 @@ const AppStore: React.FC<AppStoreProps> = ({ installedApps, onInstall }) => {
     return fuse.search(query).map(r => r.item);
   }, [query, fuse]);
 
+  const handleAction = (appId: AppID, isInstalled: boolean) => {
+      if (isInstalled) {
+          // FIX: Use 'open' which is a valid InteractionType
+          systemCore.trackInteraction(AppID.STORE, 'open', { target_app: appId });
+          onLaunch(appId);
+      } else {
+          // FIX: Use 'download' which is a valid InteractionType for installs
+          systemCore.trackInteraction(AppID.STORE, 'download', { target_app: appId });
+          onInstall(appId);
+      }
+  };
+
   return (
     <div className="h-full bg-[#1c1c1e] text-white overflow-y-auto">
       {/* Hero Section */}
@@ -35,7 +48,7 @@ const AppStore: React.FC<AppStoreProps> = ({ installedApps, onInstall }) => {
            <p className="text-gray-300 mb-6 max-w-md">Track the latest internet controversy and timelines with the updated Drama Tracker tool.</p>
            {!installedApps.includes(AppID.DRAMA) && (
               <button 
-                onClick={() => onInstall(AppID.DRAMA)}
+                onClick={() => handleAction(AppID.DRAMA, false)}
                 className="bg-white text-black px-6 py-2 rounded-full font-bold hover:bg-gray-200 transition-colors flex items-center gap-2"
               >
                 <Download size={18} />
@@ -77,13 +90,12 @@ const AppStore: React.FC<AppStoreProps> = ({ installedApps, onInstall }) => {
                 </div>
 
                 <button
-                    onClick={() => !isInstalled && onInstall(app.id)}
-                    disabled={isInstalled}
+                    onClick={() => handleAction(app.id, isInstalled)}
                     className={`
                         px-6 py-1.5 rounded-full font-bold text-sm transition-all flex items-center gap-1.5
                         ${isInstalled 
-                            ? 'bg-gray-600/50 text-gray-400 cursor-default' 
-                            : 'bg-[#2c2c2e] text-[#007AFF] bg-gray-100 hover:bg-gray-200'}
+                            ? 'bg-gray-600/50 text-white hover:bg-gray-600' 
+                            : 'bg-white text-[#007AFF] hover:bg-gray-100'}
                     `}
                 >
                     {isInstalled ? 'OPEN' : 'GET'}
