@@ -7,7 +7,8 @@ import {
   Wifi, Bluetooth, Database, Zap, Lock, Hammer,
   Info, Smartphone, HardDrive, RotateCcw,
   Check, AlertTriangle, Eye, Sun, Speaker, 
-  Mic, Globe, Key, FileText, Server
+  Mic, Globe, Key, FileText, Server, MessageSquare,
+  Play
 } from 'lucide-react';
 import { storage, STORES, StoreStats } from '../services/storageService';
 import { systemCore } from '../services/systemCore';
@@ -147,6 +148,9 @@ const SettingsApp: React.FC<{ currentWallpaperId: string, onWallpaperChange: (id
   const [sysMetrics, setSysMetrics] = useState<any>(null);
   const [recentEvents, setRecentEvents] = useState<any[]>([]);
   const [aiLatency, setAiLatency] = useState<number | null>(null);
+  const [testPrompt, setTestPrompt] = useState('');
+  const [testResponse, setTestResponse] = useState('');
+  const [isTestingAi, setIsTestingAi] = useState(false);
 
   const currentView = viewStack[viewStack.length - 1];
 
@@ -253,13 +257,25 @@ const SettingsApp: React.FC<{ currentWallpaperId: string, onWallpaperChange: (id
   const testAiLatency = async () => {
       setAiLatency(0); // Loading
       const start = performance.now();
-      // Simple prompt to test roundtrip
       try {
         await systemCore.getOptimizedPrompt("Ping", "test");
         const end = performance.now();
         setAiLatency(Math.round(end - start));
       } catch (e) {
           setAiLatency(-1); // Error
+      }
+  };
+
+  const handleTestPrompt = async () => {
+      if (!testPrompt.trim()) return;
+      setIsTestingAi(true);
+      try {
+          const response = await systemCore.getOptimizedPrompt(testPrompt, "test_console");
+          setTestResponse(response);
+      } catch (e) {
+          setTestResponse("Error: Failed to fetch response.");
+      } finally {
+          setIsTestingAi(false);
       }
   };
 
@@ -339,9 +355,10 @@ const SettingsApp: React.FC<{ currentWallpaperId: string, onWallpaperChange: (id
                 <div className="absolute top-2 right-2 flex gap-2">
                     <span className="animate-pulse">●</span> LIVE
                 </div>
+                {/* FIX: Use timestamp as key to prevent stable reload glitch */}
                 <div className="h-64 overflow-y-auto custom-scrollbar flex flex-col-reverse gap-1">
-                    {recentEvents.map((e, i) => (
-                        <div key={i} className="whitespace-nowrap flex gap-2 opacity-80 hover:opacity-100 transition-opacity">
+                    {recentEvents.map((e) => (
+                        <div key={`${e.timestamp}-${e.action}`} className="whitespace-nowrap flex gap-2 opacity-80 hover:opacity-100 transition-opacity">
                             <span className="text-gray-500">[{new Date(e.timestamp).toLocaleTimeString().split(' ')[0]}]</span>
                             <span className="text-blue-400 font-bold">{e.appId}</span>
                             <span className="text-white">{e.action}</span>
@@ -422,6 +439,34 @@ const SettingsApp: React.FC<{ currentWallpaperId: string, onWallpaperChange: (id
                   color="bg-gray-500"
               />
           </ListGroup>
+
+          <div className="px-4 mb-6">
+              <h3 className="px-4 mb-2 text-[13px] text-gray-500 uppercase font-medium ml-1">Live Test Console</h3>
+              <div className="bg-white dark:bg-[#1C1C1E] p-4 rounded-xl border border-gray-200 dark:border-transparent">
+                  <div className="flex gap-2 mb-3">
+                      <input 
+                          type="text" 
+                          value={testPrompt}
+                          onChange={(e) => setTestPrompt(e.target.value)}
+                          placeholder="Ask Gemini something..."
+                          className="flex-1 bg-gray-100 dark:bg-black/50 border border-transparent focus:border-blue-500 rounded-lg px-3 py-2 text-sm outline-none transition-all"
+                          onKeyDown={(e) => e.key === 'Enter' && handleTestPrompt()}
+                      />
+                      <button 
+                          onClick={handleTestPrompt}
+                          disabled={isTestingAi || !testPrompt.trim()}
+                          className="bg-blue-500 text-white p-2 rounded-lg disabled:opacity-50"
+                      >
+                          {isTestingAi ? <Activity className="animate-spin" size={18} /> : <Play size={18} />}
+                      </button>
+                  </div>
+                  {testResponse && (
+                      <div className="p-3 bg-gray-50 dark:bg-black/30 rounded-lg text-xs font-mono text-gray-700 dark:text-gray-300 whitespace-pre-wrap max-h-32 overflow-y-auto custom-scrollbar">
+                          {testResponse}
+                      </div>
+                  )}
+              </div>
+          </div>
 
           <ListGroup title="Parameters" footer="Higher temperature allows for more creative but less predictable responses.">
                <ListItem 
@@ -530,7 +575,7 @@ const SettingsApp: React.FC<{ currentWallpaperId: string, onWallpaperChange: (id
         {currentView === 'general' && (
             <div className="pt-6">
                 <ListGroup>
-                    <ListItem label="About" isLink />
+                    <ListItem label="About" isLink onClick={() => pushView('about')} />
                     <ListItem label="Software Update" value="OS 18.0.1" isLink />
                 </ListGroup>
                 <ListGroup>
@@ -760,9 +805,10 @@ const SettingsApp: React.FC<{ currentWallpaperId: string, onWallpaperChange: (id
                         />
                     </ListGroup>
                 </div>
+                {/* FIX: Use timestamp as key */}
                 <div className="flex-1 bg-[#111] p-4 font-mono text-[10px] overflow-auto custom-scrollbar">
-                    {logs.map((log, i) => (
-                        <div key={i} className={`mb-1 ${log.type === 'error' ? 'text-red-400' : log.type === 'warn' ? 'text-yellow-400' : 'text-gray-300'}`}>
+                    {logs.map((log) => (
+                        <div key={`${log.timestamp}-${log.message}`} className={`mb-1 ${log.type === 'error' ? 'text-red-400' : log.type === 'warn' ? 'text-yellow-400' : 'text-gray-300'}`}>
                             <span className="opacity-50">[{new Date(log.timestamp).toLocaleTimeString()}]</span> {log.message}
                         </div>
                     ))}
