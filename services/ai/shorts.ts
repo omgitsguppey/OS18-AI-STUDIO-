@@ -1,6 +1,7 @@
 
 import { Type } from "@google/genai";
-import { getAIClient, APP_MODEL_CONFIG } from "./core";
+import { APP_MODEL_CONFIG, generateAIContent, generateAIVideo } from "./core";
+import { getArray, getString, mapRecordArray, parseJsonObject } from "./parse";
 import { AppID } from "../../types";
 
 export interface ShortConcept {
@@ -16,7 +17,6 @@ export const generateShortsConcepts = async (
   accountName: string, 
   audioContext: string
 ): Promise<ShortConcept[]> => {
-  const ai = getAIClient();
   const systemInstruction = `You are a viral content strategist for a burner account named "@${accountName}".
   Niche: ${niche}.
   Audio/Pacing Requirements: ${audioContext || "Standard viral pacing"}.
@@ -25,7 +25,7 @@ export const generateShortsConcepts = async (
   The 'visualPrompt' must be descriptive, focused on movement and aesthetics, suitable for a video generation model.
   Keep prompts under 40 words. Focus on visual loops, satisfying motion, or atmospheric scenes.`;
 
-  const response = await ai.models.generateContent({
+  const response = await generateAIContent({
     model: APP_MODEL_CONFIG[AppID.SHORTS_STUDIO],
     contents: "Generate 3 video concepts.",
     config: {
@@ -51,20 +51,21 @@ export const generateShortsConcepts = async (
     }
   });
 
-  const data = JSON.parse(response.text || '{}');
-  return (data.concepts || []).map((c: any) => ({
-    ...c,
+  const data = parseJsonObject(response.text);
+  if (!data) return [];
+  return mapRecordArray(getArray(data, "concepts")).map((concept) => ({
+    title: getString(concept, "title", "Untitled"),
+    visualPrompt: getString(concept, "visualPrompt", ""),
     id: Date.now().toString() + Math.random().toString().slice(2, 5),
     niche,
     style: niche // Use niche as style for continuity
-  }));
+  })).filter((concept) => concept.visualPrompt.length > 0);
 };
 
 export const generateShortsThumbnail = async (prompt: string, style: string): Promise<string | null> => {
-  const ai = getAIClient();
   const fullPrompt = `${prompt}. Style: ${style}. High quality, 9:16 vertical ratio, eye-catching YouTube Shorts thumbnail.`;
 
-  const response = await ai.models.generateContent({
+  const response = await generateAIContent({
     model: APP_MODEL_CONFIG['shorts_studio_image'], // gemini-2.5-flash-image
     contents: {
       parts: [{ text: fullPrompt }]
@@ -85,11 +86,10 @@ export const generateShortsThumbnail = async (prompt: string, style: string): Pr
 };
 
 export const generateShortsVideo = async (prompt: string, style: string, audioContext: string): Promise<string | null> => {
-  const ai = getAIClient();
   const fullPrompt = `${prompt}. Niche/Style: ${style}. Audio Cues: ${audioContext}. Cinematic, high motion, 720p quality.`;
 
   // Veo Video Generation
-  let operation = await ai.models.generateVideos({
+  const result = await generateAIVideo({
     model: APP_MODEL_CONFIG['shorts_studio_video'], // veo-3.1-fast-generate-preview
     prompt: fullPrompt,
     config: {
@@ -99,12 +99,5 @@ export const generateShortsVideo = async (prompt: string, style: string, audioCo
     }
   });
 
-  // Polling loop
-  while (!operation.done) {
-    await new Promise(resolve => setTimeout(resolve, 5000)); // Poll every 5s
-    operation = await ai.operations.getVideosOperation({ operation: operation });
-  }
-
-  const videoUri = operation.response?.generatedVideos?.[0]?.video?.uri;
-  return videoUri || null;
+  return result.proxyUrl;
 };

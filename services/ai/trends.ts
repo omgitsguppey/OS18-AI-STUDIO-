@@ -1,6 +1,7 @@
 
 import { Type } from "@google/genai";
-import { getAIClient, APP_MODEL_CONFIG } from "./core";
+import { APP_MODEL_CONFIG, generateAIContent } from "./core";
+import { getArray, getNumber, getString, mapRecordArray, mapStringArray, parseJsonArray, parseJsonObject } from "./parse";
 import { AppID } from "../../types";
 
 export interface TrendItem {
@@ -56,9 +57,7 @@ export const fetchRawTrends = async (): Promise<TrendItem[]> => {
 
 // 2. Gemini Flash Lite + Google Search
 export const searchGoogleTrends = async (query: string): Promise<TrendItem[]> => {
-  const ai = getAIClient();
-  
-  const response = await ai.models.generateContent({
+  const response = await generateAIContent({
     model: 'gemini-flash-lite-latest', // Explicitly requested Lite model
     contents: `Find 5 currently trending news items or discussions related to: "${query}". 
     Return a valid JSON array of objects with keys: title, volume (e.g. "High"), snippet, and source (e.g. "Google Search").`,
@@ -81,12 +80,12 @@ export const searchGoogleTrends = async (query: string): Promise<TrendItem[]> =>
     }
   });
   
-  const items = JSON.parse(response.text || '[]');
+  const items = parseJsonArray(response.text);
   
   // Augment with grounding data if available (URLs)
   const chunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
   
-  return items.map((item: any, index: number) => {
+  return mapRecordArray(items).map((item, index) => {
     // Try to find a matching URL from grounding chunks
     const grounding = chunks[index] as any;
     const url = grounding?.web?.uri || '';
@@ -94,9 +93,9 @@ export const searchGoogleTrends = async (query: string): Promise<TrendItem[]> =>
     return {
       id: `search-${Date.now()}-${index}`,
       source: 'Google',
-      title: item.title,
-      volume: item.volume || 'Trending',
-      snippet: item.snippet,
+      title: getString(item, "title", "Untitled Trend"),
+      volume: getString(item, "volume", "Trending"),
+      snippet: getString(item, "snippet", ""),
       url: url,
       timestamp: Date.now()
     };
@@ -105,8 +104,6 @@ export const searchGoogleTrends = async (query: string): Promise<TrendItem[]> =>
 
 // 3. Gemini 3 Flash Pattern Analysis (Quantitative Focus + Real Time Grounding)
 export const analyzeTrendPattern = async (trendTitle: string, context: string): Promise<TrendAnalysis> => {
-  const ai = getAIClient();
-  
   const systemInstruction = `You are a Real-Time Data Analyst. 
   You MUST use the Google Search tool to gather ACTUAL metrics for the requested trend.
   Do NOT simulate numbers. Base your calculations on the live search results found.
@@ -122,7 +119,7 @@ export const analyzeTrendPattern = async (trendTitle: string, context: string): 
   const prompt = `Analyze real-time data for: "${trendTitle}". Context: "${context}".
   Perform a Google Search to find the latest engagement numbers and article volume.`;
 
-  const response = await ai.models.generateContent({
+  const response = await generateAIContent({
     model: APP_MODEL_CONFIG[AppID.TRENDS_AI],
     contents: prompt,
     config: {
@@ -160,8 +157,35 @@ export const analyzeTrendPattern = async (trendTitle: string, context: string): 
     }
   });
 
+  const result = parseJsonObject(response.text);
+  if (!result) {
+    return {
+      trendId: '',
+      viralityScore: 0,
+      sentimentScore: 0,
+      growthRate: "",
+      estimatedReach: "",
+      engagementRatio: "",
+      lifespanDays: 0,
+      platformDistribution: [],
+      keyKeywords: [],
+      summary: ""
+    };
+  }
+  const platforms = mapRecordArray(getArray(result, "platformDistribution")).map((platform) => ({
+    platform: getString(platform, "platform", ""),
+    percentage: getNumber(platform, "percentage", 0)
+  })).filter((entry) => entry.platform.length > 0);
   return {
     trendId: '', // Assigned by caller
-    ...JSON.parse(response.text || '{}')
+    viralityScore: getNumber(result, "viralityScore", 0),
+    sentimentScore: getNumber(result, "sentimentScore", 0),
+    growthRate: getString(result, "growthRate", ""),
+    estimatedReach: getString(result, "estimatedReach", ""),
+    engagementRatio: getString(result, "engagementRatio", ""),
+    lifespanDays: getNumber(result, "lifespanDays", 0),
+    platformDistribution: platforms,
+    keyKeywords: mapStringArray(getArray(result, "keyKeywords")),
+    summary: getString(result, "summary", "")
   };
 };

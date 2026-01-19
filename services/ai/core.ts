@@ -1,11 +1,120 @@
 
-import { GoogleGenAI, GenerateContentResponse } from "@google/genai";
+import { asArray } from "../utils/normalize";
 import { AppID } from "../../types";
 import { systemCore } from "../systemCore";
 
-// Centralized API Client
-export const getAIClient = () => {
-  return new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
+const AI_GENERATE_ENDPOINT = '/api/ai/generate';
+const AI_STREAM_ENDPOINT = '/api/ai/stream';
+const AI_VIDEO_ENDPOINT = '/api/ai/videos';
+
+export interface AIProxyResponse {
+  text: string;
+  candidates: any[];
+}
+
+export interface AIProxyRequest {
+  model: string;
+  contents: unknown;
+  config?: unknown;
+}
+
+export interface AIVideoRequest {
+  model: string;
+  prompt: string;
+  config?: unknown;
+}
+
+export interface AIVideoResponse {
+  proxyUrl: string | null;
+}
+
+const normalizeProxyResponse = (raw: unknown): AIProxyResponse => {
+  if (!raw || typeof raw !== 'object') {
+    return { text: '', candidates: [] };
+  }
+  const data = raw as { text?: unknown; candidates?: unknown };
+  const text = typeof data.text === 'string' ? data.text : '';
+  const candidates = asArray<any>(data.candidates);
+  return { text, candidates };
+};
+
+const postJson = async (url: string, payload: unknown): Promise<Response> => {
+  return fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+};
+
+export const generateAIContent = async (request: AIProxyRequest): Promise<AIProxyResponse> => {
+  const response = await postJson(AI_GENERATE_ENDPOINT, request);
+  if (!response.ok) {
+    const error = new Error(`AI proxy request failed (${response.status}).`);
+    (error as { status?: number }).status = response.status;
+    throw error;
+  }
+  const raw = await response.json();
+  return normalizeProxyResponse(raw);
+};
+
+export async function* streamAIContent(request: AIProxyRequest): AsyncGenerator<string> {
+  const response = await postJson(AI_STREAM_ENDPOINT, request);
+  if (!response.ok || !response.body) {
+    throw new Error(`AI stream request failed (${response.status}).`);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let newlineIndex = buffer.indexOf('\n');
+    while (newlineIndex >= 0) {
+      const line = buffer.slice(0, newlineIndex).trim();
+      buffer = buffer.slice(newlineIndex + 1);
+      if (line) {
+        try {
+          const parsed = JSON.parse(line);
+          const normalized = normalizeProxyResponse(parsed);
+          if (normalized.text) {
+            yield normalized.text;
+          }
+        } catch (error) {
+          console.error("AI stream parse error", error);
+        }
+      }
+      newlineIndex = buffer.indexOf('\n');
+    }
+  }
+
+  const finalLine = buffer.trim();
+  if (finalLine) {
+    try {
+      const parsed = JSON.parse(finalLine);
+      const normalized = normalizeProxyResponse(parsed);
+      if (normalized.text) {
+        yield normalized.text;
+      }
+    } catch (error) {
+      console.error("AI stream parse error", error);
+    }
+  }
+}
+
+export const generateAIVideo = async (request: AIVideoRequest): Promise<AIVideoResponse> => {
+  const response = await postJson(AI_VIDEO_ENDPOINT, request);
+  if (!response.ok) {
+    throw new Error(`AI video request failed (${response.status}).`);
+  }
+  const raw = await response.json();
+  if (!raw || typeof raw !== 'object') {
+    return { proxyUrl: null };
+  }
+  const data = raw as { proxyUrl?: unknown };
+  return { proxyUrl: typeof data.proxyUrl === 'string' ? data.proxyUrl : null };
 };
 
 // Model Registry
@@ -70,8 +179,7 @@ export const generateOptimizedContent = async (
     originalContents: any, // string or object
     config: any = {},
     isRegen: boolean = false
-): Promise<GenerateContentResponse> => {
-    const ai = getAIClient();
+): Promise<AIProxyResponse> => {
     const model = APP_MODEL_CONFIG[appId] || 'gemini-flash-lite-latest';
     
     // 1. Telemetry: Track the request
@@ -107,10 +215,10 @@ export const generateOptimizedContent = async (
     // 4. Execute with Retry & Telemetry
     const start = Date.now();
     try {
-        const response = await retryWithBackoff<GenerateContentResponse>(() => ai.models.generateContent({
-            model,
-            contents: finalContents,
-            config: finalConfig
+        const response = await retryWithBackoff<AIProxyResponse>(() => generateAIContent({
+          model,
+          contents: finalContents,
+          config: finalConfig
         }));
         
         // Log completion for real metrics

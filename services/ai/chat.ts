@@ -1,20 +1,18 @@
 
-import { GenerateContentResponse } from "@google/genai";
-import { getAIClient, APP_MODEL_CONFIG } from "./core";
+import { APP_MODEL_CONFIG, streamAIContent } from "./core";
 
 export async function* streamGeminiChat(
   message: string,
   history: { role: string; content: string }[],
   memory: string
 ) {
-  const ai = getAIClient();
   const systemInstruction = `You are a helpful AI assistant with long-term memory. 
   Current Memory: ${memory || "No previous memory stored."}
   If you learn something new and important about the user, wrap it in [[MEMORY: facts]]. 
   Keep responses concise (max 2 sentences).`;
 
   try {
-    const responseStream = await ai.models.generateContentStream({
+    const responseStream = streamAIContent({
       model: APP_MODEL_CONFIG['chat'],
       contents: history.map(h => ({
         role: h.role === 'user' ? 'user' : 'model',
@@ -22,14 +20,12 @@ export async function* streamGeminiChat(
       })),
       config: {
         systemInstruction,
-        temperature: 0.7,
-      },
+        temperature: 0.7
+      }
     });
 
     for await (const chunk of responseStream) {
-      const response = chunk as GenerateContentResponse;
-      const text = response.text;
-      if (text) yield text;
+      if (chunk) yield chunk;
     }
   } catch (error) {
     console.error("Gemini Streaming Error:", error);

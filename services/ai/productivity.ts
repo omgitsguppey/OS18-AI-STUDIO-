@@ -1,6 +1,7 @@
 
 import { Type } from "@google/genai";
-import { getAIClient, APP_MODEL_CONFIG } from "./core";
+import { APP_MODEL_CONFIG, generateAIContent } from "./core";
+import { getArray, getBoolean, getString, mapRecordArray, parseJsonObject } from "./parse";
 import { AppID } from "../../types";
 
 export interface PriorityTask {
@@ -19,7 +20,6 @@ export interface PriorityPlan {
 }
 
 export const breakdownTask = async (input: string): Promise<Omit<PriorityPlan, 'id' | 'createdAt'>> => {
-  const ai = getAIClient();
   const systemInstruction = `You are a Ruthless Prioritizer and Anti-Procrastination Engine.
   The user is suffering from analysis paralysis or overthinking.
   Your Goal: Take their complex, messy, or overwhelming thought and break it down into 3-5 stupidly simple, immediate, physical actions.
@@ -31,7 +31,7 @@ export const breakdownTask = async (input: string): Promise<Omit<PriorityPlan, '
   4. Max 6 tasks.
   `;
 
-  const response = await ai.models.generateContent({
+  const response = await generateAIContent({
     model: APP_MODEL_CONFIG[AppID.PRIORITY_AI],
     contents: `Overwhelmed by: "${input}"`,
     config: {
@@ -59,5 +59,17 @@ export const breakdownTask = async (input: string): Promise<Omit<PriorityPlan, '
     }
   });
 
-  return JSON.parse(response.text || '{}');
+  const result = parseJsonObject(response.text);
+  if (!result) {
+    return { title: "", tasks: [], motivation: "" };
+  }
+  const tasks = mapRecordArray(getArray(result, "tasks")).map((task) => ({
+    text: getString(task, "text", ""),
+    completed: getBoolean(task, "completed", false)
+  })).filter((task) => task.text.length > 0);
+  return {
+    title: getString(result, "title", ""),
+    tasks,
+    motivation: getString(result, "motivation", "")
+  };
 };

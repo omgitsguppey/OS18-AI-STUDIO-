@@ -1,6 +1,7 @@
 import { Type } from "@google/genai";
 import { AppID } from "../types";
-import { APP_MODEL_CONFIG, getAIClient } from "../services/ai/core";
+import { APP_MODEL_CONFIG, generateAIContent } from "../services/ai/core";
+import { getNumber, getString, mapRecordArray, parseJsonArray } from "../services/ai/parse";
 import { LocalIntelligence } from "../services/localIntelligence";
 import type { RevenueRecord } from "../services/geminiService";
 
@@ -23,13 +24,12 @@ const parseRevenueFileInWorker = async (file: File): Promise<Omit<RevenueRecord,
     if (records.length > 0) return records;
   }
 
-  const ai = getAIClient();
   const base64Data = arrayBufferToBase64(await file.arrayBuffer());
 
   const systemInstruction = `Extract revenue data from this document.
   Return JSON array with: date (YYYY-MM-DD), label, trackTitle, artist, platform, revenueAmount (number), currency.`;
 
-  const response = await ai.models.generateContent({
+  const response = await generateAIContent({
     model: APP_MODEL_CONFIG[AppID.ANALYTICS_AI],
     contents: {
       role: 'user',
@@ -60,7 +60,16 @@ const parseRevenueFileInWorker = async (file: File): Promise<Omit<RevenueRecord,
     }
   });
 
-  return JSON.parse(response.text || '[]');
+  const records = parseJsonArray(response.text);
+  return mapRecordArray(records).map((entry) => ({
+    date: getString(entry, "date", ""),
+    label: getString(entry, "label", ""),
+    trackTitle: getString(entry, "trackTitle", ""),
+    artist: getString(entry, "artist", ""),
+    platform: getString(entry, "platform", ""),
+    revenueAmount: getNumber(entry, "revenueAmount", 0),
+    currency: getString(entry, "currency", "")
+  })).filter((entry) => entry.date && entry.label && entry.trackTitle && entry.artist && entry.platform && entry.currency);
 };
 
 self.onmessage = async (event: MessageEvent) => {

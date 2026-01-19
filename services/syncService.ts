@@ -91,6 +91,11 @@ class SyncService {
     // defensive clone so callers can’t mutate core memory
     return JSON.parse(JSON.stringify(cachedState)) as SystemState;
   }
+
+  updateState(newState: Partial<SystemState>, fallback: SystemState) {
+    const base = cachedState ?? fallback;
+    saveCachedState({ ...base, ...newState });
+  }
 }
 
 export const syncService = new SyncService();

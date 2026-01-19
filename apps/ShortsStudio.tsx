@@ -196,8 +196,7 @@ const ShortsStudio: React.FC = () => {
         if (url) url = `data:image/png;base64,${url}`;
       } else {
         const audioCtx = getAudioContextString();
-        const uri = await generateShortsVideo(concept.visualPrompt, selectedNiche, audioCtx);
-        url = uri ? `${uri}&key=${process.env.API_KEY}` : null;
+        url = await generateShortsVideo(concept.visualPrompt, selectedNiche, audioCtx);
       }
 
       if (url) {

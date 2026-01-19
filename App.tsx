@@ -158,16 +158,39 @@ const App: React.FC = () => {
     syncService.init().catch(console.error);
     systemCore.init().catch(console.error);
     
+    const isSensitiveTarget = (target: HTMLElement | null) => {
+        if (!target) return false;
+        if (target.closest('input, textarea, [contenteditable="true"]')) return true;
+        if (target instanceof HTMLInputElement && target.type === 'password') return true;
+        return false;
+    };
+
+    const getTelemetryLabel = (target: HTMLElement | null) => {
+        if (!target) return 'UNKNOWN';
+        const source = target.closest('[data-telemetry-id],[data-telemetry-label],[data-testid],[aria-label]');
+        if (source) {
+            const label = source.getAttribute('data-telemetry-id')
+              || source.getAttribute('data-telemetry-label')
+              || source.getAttribute('data-testid')
+              || source.getAttribute('aria-label');
+            if (label) return label.substring(0, 40);
+        }
+        const role = target.getAttribute('role');
+        return `${target.tagName}${role ? `:${role}` : ''}`.substring(0, 40);
+    };
+
     const handleGlobalClick = (e: MouseEvent) => {
         const target = e.target as HTMLElement;
-        const label = target.innerText || target.getAttribute('aria-label') || target.tagName;
+        if (isSensitiveTarget(target)) return;
         if (!target.closest('.font-mono')) {
-            systemCore.trackRawEvent('click', label.substring(0, 30));
+            systemCore.trackRawEvent('click', getTelemetryLabel(target));
         }
     };
 
     const handleGlobalKey = (e: KeyboardEvent) => {
-        systemCore.trackRawEvent('keypress', 'Input Activity');
+        const target = e.target as HTMLElement | null;
+        if (isSensitiveTarget(target)) return;
+        systemCore.trackRawEvent('keypress', getTelemetryLabel(target));
     };
 
     window.addEventListener('click', handleGlobalClick);

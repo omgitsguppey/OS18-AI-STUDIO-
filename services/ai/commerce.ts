@@ -1,6 +1,7 @@
 
 import { Type } from "@google/genai";
-import { getAIClient, fileToBase64, APP_MODEL_CONFIG } from "./core";
+import { fileToBase64, APP_MODEL_CONFIG, generateAIContent } from "./core";
+import { getArray, getNumber, getString, isRecord, mapRecordArray, parseJsonArray, parseJsonObject } from "./parse";
 import { AppID } from "../../types";
 import { LocalIntelligence } from "../localIntelligence";
 
@@ -24,12 +25,11 @@ export interface MarkupStrategy {
 }
 
 export const generateMarkupStrategy = async (niche: string): Promise<MarkupStrategy> => {
-  const ai = getAIClient();
   const prompt = `Identify business opportunities for: "${niche}".
   Find 3-5 items (Affiliate, White Label, DFY).
   Provide marketing angles and pricing.`;
 
-  const response = await ai.models.generateContent({
+  const response = await generateAIContent({
     model: APP_MODEL_CONFIG[AppID.MARKUP_AI],
     contents: prompt,
     config: {
@@ -62,7 +62,25 @@ export const generateMarkupStrategy = async (niche: string): Promise<MarkupStrat
     }
   });
 
-  return JSON.parse(response.text || '{}');
+  const result = parseJsonObject(response.text);
+  if (!result) {
+    return { niche, summary: "", opportunities: [] };
+  }
+  const opportunities = mapRecordArray(getArray(result, "opportunities")).map((entry) => ({
+    type: getString(entry, "type", "Affiliate") as MarkupOpportunity["type"],
+    name: getString(entry, "name", ""),
+    provider: getString(entry, "provider", ""),
+    description: getString(entry, "description", ""),
+    baseCost: getString(entry, "baseCost", ""),
+    markupPrice: getString(entry, "markupPrice", ""),
+    profitMargin: getString(entry, "profitMargin", ""),
+    marketingAngle: getString(entry, "marketingAngle", "")
+  })).filter((entry) => entry.name.length > 0);
+  return {
+    niche: getString(result, "niche", niche),
+    summary: getString(result, "summary", ""),
+    opportunities
+  };
 };
 
 // --- PRODUCT STRATEGY (JUST SELL IT) ---
@@ -87,7 +105,6 @@ export interface ProductStrategy {
 }
 
 export const generateProductStrategy = async (productName: string, modifiers: string[] = []): Promise<ProductStrategy> => {
-  const ai = getAIClient();
   const modifierContext = modifiers.length > 0 ? `Constraints: ${modifiers.join(', ')}.` : '';
   
   // Ask AI for qualitative strategy and a BASE PRICE NUMBER only
@@ -98,7 +115,7 @@ export const generateProductStrategy = async (productName: string, modifiers: st
   Identify top 3 customer objections and rebuttals.
   Also estimate a "basePriceEstimate" (number) for this type of product in USD.`;
 
-  const response = await ai.models.generateContent({
+  const response = await generateAIContent({
     model: APP_MODEL_CONFIG[AppID.SELL_IT],
     contents: prompt,
     config: {
@@ -145,14 +162,51 @@ export const generateProductStrategy = async (productName: string, modifiers: st
     }
   });
 
-  const data = JSON.parse(response.text || '{}');
-  
+  const data = parseJsonObject(response.text);
+  if (!data) {
+    return {
+      productName,
+      emotionalValueProp: "",
+      painPoints: [],
+      audience: { demographics: "", psychographics: "" },
+      pricing: LocalIntelligence.calculatePricingTiers(50),
+      marketingChannels: [],
+      salesFunnel: [],
+      objections: []
+    };
+  }
+
+  const painPoints = mapRecordArray(getArray(data, "painPoints")).map((entry) => ({
+    problem: getString(entry, "problem", ""),
+    solution: getString(entry, "solution", "")
+  })).filter((entry) => entry.problem && entry.solution);
+  const audienceRecord = isRecord(data.audience) ? data.audience : {};
+  const salesFunnel = mapRecordArray(getArray(data, "salesFunnel")).map((entry) => ({
+    stage: getString(entry, "stage", ""),
+    tactic: getString(entry, "tactic", "")
+  })).filter((entry) => entry.stage && entry.tactic);
+  const objections = mapRecordArray(getArray(data, "objections")).map((entry) => ({
+    objection: getString(entry, "objection", ""),
+    rebuttal: getString(entry, "rebuttal", "")
+  })).filter((entry) => entry.objection && entry.rebuttal);
+  const marketingChannels = getArray(data, "marketingChannels").filter((item): item is string => typeof item === "string");
+  const basePriceEstimate = getNumber(data, "basePriceEstimate", 50);
+
   // Calculate pricing tiers deterministically
-  const pricing = LocalIntelligence.calculatePricingTiers(data.basePriceEstimate || 50);
+  const pricing = LocalIntelligence.calculatePricingTiers(basePriceEstimate);
 
   return {
-      ...data,
-      pricing
+    productName: getString(data, "productName", productName),
+    emotionalValueProp: getString(data, "emotionalValueProp", ""),
+    painPoints,
+    audience: {
+      demographics: getString(audienceRecord, "demographics", ""),
+      psychographics: getString(audienceRecord, "psychographics", "")
+    },
+    pricing,
+    marketingChannels,
+    salesFunnel,
+    objections
   };
 };
 
@@ -178,13 +232,12 @@ export const parseRevenueFile = async (file: File): Promise<Omit<RevenueRecord, 
   }
 
   // 2. AI Fallback for Images/PDFs
-  const ai = getAIClient();
   const base64Data = await fileToBase64(file);
   
   const systemInstruction = `Extract revenue data from this document.
   Return JSON array with: date (YYYY-MM-DD), label, trackTitle, artist, platform, revenueAmount (number), currency.`;
 
-  const response = await ai.models.generateContent({
+  const response = await generateAIContent({
     model: APP_MODEL_CONFIG[AppID.ANALYTICS_AI],
     contents: {
       role: 'user',
@@ -215,5 +268,14 @@ export const parseRevenueFile = async (file: File): Promise<Omit<RevenueRecord, 
     }
   });
 
-  return JSON.parse(response.text || '[]');
+  const records = parseJsonArray(response.text);
+  return mapRecordArray(records).map((entry) => ({
+    date: getString(entry, "date", ""),
+    label: getString(entry, "label", ""),
+    trackTitle: getString(entry, "trackTitle", ""),
+    artist: getString(entry, "artist", ""),
+    platform: getString(entry, "platform", ""),
+    revenueAmount: getNumber(entry, "revenueAmount", 0),
+    currency: getString(entry, "currency", "")
+  })).filter((entry) => entry.date && entry.label && entry.trackTitle && entry.artist && entry.platform && entry.currency);
 };

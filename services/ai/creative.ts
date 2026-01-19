@@ -1,5 +1,6 @@
 import { Type } from "@google/genai";
-import { generateOptimizedContent, APP_MODEL_CONFIG, getAIClient } from "./core";
+import { APP_MODEL_CONFIG, generateAIContent, generateOptimizedContent } from "./core";
+import { getArray, getNumber, getString, isRecord, mapStringArray, parseJsonObject } from "./parse";
 import { AppID } from "../../types";
 import { LocalIntelligence } from "../localIntelligence";
 
@@ -85,11 +86,44 @@ export const analyzeLyrics = async (songTitle: string, lyrics: string): Promise<
     }
   );
 
-  const aiResult = JSON.parse(response.text || '{}');
+  const aiResult = parseJsonObject(response.text);
+  if (!aiResult) {
+    return {
+      songTitle,
+      vocabularyComplexity: localStats.vocabularyComplexity,
+      metaphoricDensity: 0,
+      emotionalResonance: 0,
+      structuralInnovation: localStats.structuralInnovation,
+      rhythmicSophistication: localStats.rhythmicSophistication,
+      linguisticSignature: "",
+      detailedBreakdown: {
+        vocabulary: "",
+        metaphors: "",
+        emotion: "",
+        structure: "",
+        rhythm: ""
+      },
+      keyMetaphors: [],
+      originalLyrics: lyrics,
+      timestamp: Date.now()
+    };
+  }
+  const breakdown = isRecord(aiResult.detailedBreakdown) ? aiResult.detailedBreakdown : {};
   
   // 3. Merge Local Stats with AI Result
   return { 
-    ...aiResult, 
+    songTitle: getString(aiResult, "songTitle", songTitle),
+    metaphoricDensity: getNumber(aiResult, "metaphoricDensity", 0),
+    emotionalResonance: getNumber(aiResult, "emotionalResonance", 0),
+    linguisticSignature: getString(aiResult, "linguisticSignature", ""),
+    detailedBreakdown: {
+      vocabulary: getString(breakdown, "vocabulary", ""),
+      metaphors: getString(breakdown, "metaphors", ""),
+      emotion: getString(breakdown, "emotion", ""),
+      structure: getString(breakdown, "structure", ""),
+      rhythm: getString(breakdown, "rhythm", "")
+    },
+    keyMetaphors: mapStringArray(getArray(aiResult, "keyMetaphors")),
     vocabularyComplexity: localStats.vocabularyComplexity,
     rhythmicSophistication: localStats.rhythmicSophistication,
     structuralInnovation: localStats.structuralInnovation,
@@ -128,7 +162,23 @@ export const generateArtistProfile = async (artistName: string, songs: LyricAnal
     }
   );
 
-  return JSON.parse(response.text || '{}');
+  const result = parseJsonObject(response.text);
+  if (!result) {
+    return {
+      coreThemes: [],
+      vocabularyEvolution: "",
+      emotionalArc: "",
+      signatureStyle: "",
+      suggestedCreativeDirection: ""
+    };
+  }
+  return {
+    coreThemes: mapStringArray(getArray(result, "coreThemes")),
+    vocabularyEvolution: getString(result, "vocabularyEvolution", ""),
+    emotionalArc: getString(result, "emotionalArc", ""),
+    signatureStyle: getString(result, "signatureStyle", ""),
+    suggestedCreativeDirection: getString(result, "suggestedCreativeDirection", "")
+  };
 };
 
 // --- CONTENT AI ---
@@ -200,7 +250,32 @@ export const generateContentEpisode = async (
     }
   );
 
-  return JSON.parse(response.text || '{}');
+  const result = parseJsonObject(response.text);
+  if (!result) {
+    return {
+      title: "",
+      format: "Short Form",
+      platform: "YouTube",
+      pov: "First Person",
+      hook: "",
+      script: "",
+      arcNotes: "",
+      episodeNumber
+    };
+  }
+  const formatValue = getString(result, "format", "Short Form");
+  const platformValue = getString(result, "platform", "YouTube");
+  const povValue = getString(result, "pov", "First Person");
+  return {
+    title: getString(result, "title", ""),
+    format: formatValue === "Mid Form" || formatValue === "Long Form" ? formatValue : "Short Form",
+    platform: platformValue === "TikTok" || platformValue === "Instagram" ? platformValue : "YouTube",
+    pov: povValue === "Second Person" || povValue === "Third Person" ? povValue : "First Person",
+    hook: getString(result, "hook", ""),
+    script: getString(result, "script", ""),
+    arcNotes: getString(result, "arcNotes", ""),
+    episodeNumber: getNumber(result, "episodeNumber", episodeNumber)
+  };
 };
 
 export const generateSeasonTitle = async (episodes: ContentEpisode[]): Promise<string> => {
@@ -222,7 +297,8 @@ export const generateSeasonTitle = async (episodes: ContentEpisode[]): Promise<s
     }
   );
 
-  return JSON.parse(response.text || '{}').seasonTitle || "New Season";
+  const result = parseJsonObject(response.text);
+  return result ? getString(result, "seasonTitle", "New Season") : "New Season";
 };
 
 // --- IMAGE GENERATION (WALLPAPER & ALBUM ART) ---
@@ -237,11 +313,10 @@ export const generateWallpaper = async (
   resolution: "1K" | "2K" | "4K",
   aspectRatio: "9:16" | "16:9" | "1:1"
 ): Promise<string | null> => {
-  const ai = getAIClient();
   const fullPrompt = `Style: ${style}. ${prompt}. High quality, detailed.`;
   
   try {
-    const response = await ai.models.generateContent({
+    const response = await generateAIContent({
         model: APP_MODEL_CONFIG[AppID.WALLPAPER_AI], 
         contents: { parts: [{ text: fullPrompt }] },
         config: {
