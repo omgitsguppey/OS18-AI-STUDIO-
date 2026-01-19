@@ -1,6 +1,6 @@
 
 import { Type } from "@google/genai";
-import { generateOptimizedContent } from "./core";
+import { generateOptimizedContent, normalizeAiJson } from "./core";
 import { AppID } from "../../types";
 import { processDramaDataInWorker } from "../dramaWorker";
 
@@ -34,26 +34,28 @@ export const generateCaption = async (
   If platform is Instagram or TikTok: focus on Post Caption and On-Post Overlay text.
   Respond in JSON format.`;
 
+  const responseSchema = {
+    type: Type.OBJECT,
+    properties: {
+      title: { type: Type.STRING },
+      description: { type: Type.STRING },
+      tags: { type: Type.STRING },
+      postCaption: { type: Type.STRING },
+      onPostCaption: { type: Type.STRING }
+    }
+  };
+
   const response = await generateOptimizedContent(
     AppID.CAPTIONS,
     prompt,
     {
       systemInstruction: systemPrompt,
       responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          title: { type: Type.STRING },
-          description: { type: Type.STRING },
-          tags: { type: Type.STRING },
-          postCaption: { type: Type.STRING },
-          onPostCaption: { type: Type.STRING }
-        }
-      }
+      responseSchema
     }
   );
 
-  return JSON.parse(response.text || '{}');
+  return normalizeAiJson<CaptionOutput>(response.text || '', responseSchema);
 };
 
 export const trainCaptionAI = async (
@@ -177,47 +179,49 @@ export const generateFamePlan = async (idea: string, currentStatus: string): Pro
 
   const prompt = `Project Idea: "${idea}". Current Status: "${currentStatus}". Generate the Fame Roadmap.`;
 
+  const responseSchema = {
+    type: Type.OBJECT,
+    properties: {
+      projectTitle: { type: Type.STRING },
+      theAngle: { type: Type.STRING },
+      targetArchetype: { type: Type.STRING },
+      phases: {
+        type: Type.ARRAY,
+        items: {
+          type: Type.OBJECT,
+          properties: {
+            phaseName: { type: Type.STRING },
+            goal: { type: Type.STRING },
+            steps: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  day: { type: Type.STRING },
+                  action: { type: Type.STRING },
+                  psychologicalTactic: { type: Type.STRING },
+                  majorLabelSecret: { type: Type.STRING }
+                },
+                required: ['day', 'action', 'psychologicalTactic', 'majorLabelSecret']
+              }
+            }
+          },
+          required: ['phaseName', 'goal', 'steps']
+        }
+      }
+    },
+    required: ['projectTitle', 'theAngle', 'targetArchetype', 'phases']
+  };
+
   const response = await generateOptimizedContent(
     AppID.GET_FAMOUS,
     prompt,
     {
       systemInstruction: systemInstruction,
       responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          projectTitle: { type: Type.STRING },
-          theAngle: { type: Type.STRING },
-          targetArchetype: { type: Type.STRING },
-          phases: {
-            type: Type.ARRAY,
-            items: {
-              type: Type.OBJECT,
-              properties: {
-                phaseName: { type: Type.STRING },
-                goal: { type: Type.STRING },
-                steps: {
-                  type: Type.ARRAY,
-                  items: {
-                    type: Type.OBJECT,
-                    properties: {
-                      day: { type: Type.STRING },
-                      action: { type: Type.STRING },
-                      psychologicalTactic: { type: Type.STRING },
-                      majorLabelSecret: { type: Type.STRING }
-                    },
-                    required: ['day', 'action', 'psychologicalTactic', 'majorLabelSecret']
-                  }
-                }
-              },
-              required: ['phaseName', 'goal', 'steps']
-            }
-          }
-        },
-        required: ['projectTitle', 'theAngle', 'targetArchetype', 'phases']
-      }
+      responseSchema
     }
   );
 
-  return JSON.parse(response.text || '{}');
+  return normalizeAiJson<FameRoadmap>(response.text || '', responseSchema);
 };

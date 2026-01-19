@@ -2,10 +2,97 @@
 import { GoogleGenAI, GenerateContentResponse } from "@google/genai";
 import { AppID } from "../../types";
 import { systemCore } from "../systemCore";
+import { auth } from "../firebaseConfig";
 
 // Centralized API Client
 export const getAIClient = () => {
   return new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
+};
+
+const AI_NORMALIZE_ENDPOINT = '/api/ai/normalize';
+
+type Schema =
+  | { type: 'string'; enum?: string[] }
+  | { type: 'number' | 'integer' }
+  | { type: 'boolean' }
+  | { type: 'object'; properties?: Record<string, Schema> }
+  | { type: 'array'; items?: Schema };
+
+const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const normalizeWithSchema = (value: unknown, schema: Schema): unknown => {
+  const type = typeof schema.type === 'string' ? schema.type.toLowerCase() : schema.type;
+  switch (type) {
+    case 'string': {
+      const candidate = typeof value === 'string' ? value : '';
+      if (schema.enum && schema.enum.length > 0) {
+        return schema.enum.includes(candidate) ? candidate : schema.enum[0];
+      }
+      return candidate;
+    }
+    case 'number':
+    case 'integer':
+      if (typeof value === 'number' && Number.isFinite(value)) {
+        return schema.type === 'integer' ? Math.trunc(value) : value;
+      }
+      return 0;
+    case 'boolean':
+      return typeof value === 'boolean' ? value : false;
+    case 'array': {
+      const itemsSchema = schema.items;
+      if (!itemsSchema) return Array.isArray(value) ? value : [];
+      if (!Array.isArray(value)) return [];
+      return value.map((entry) => normalizeWithSchema(entry, itemsSchema));
+    }
+    case 'object': {
+      const record = isPlainObject(value) ? value : {};
+      const properties = schema.properties ?? {};
+      const normalized: Record<string, unknown> = {};
+      Object.entries(properties).forEach(([key, propSchema]) => {
+        normalized[key] = normalizeWithSchema(record[key], propSchema);
+      });
+      return normalized;
+    }
+    default:
+      return null;
+  }
+};
+
+const normalizeLocally = <T>(text: string, schema: Schema): T => {
+  let parsed: unknown = null;
+  try {
+    parsed = text ? JSON.parse(text) : null;
+  } catch {
+    parsed = null;
+  }
+  return normalizeWithSchema(parsed, schema) as T;
+};
+
+export const normalizeAiJson = async <T>(text: string, schema: Schema): Promise<T> => {
+  const user = auth.currentUser;
+  const token = user ? await user.getIdToken() : null;
+  if (!token) {
+    return normalizeLocally<T>(text, schema);
+  }
+
+  try {
+    const response = await fetch(AI_NORMALIZE_ENDPOINT, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`
+      },
+      body: JSON.stringify({ text, schema })
+    });
+    if (!response.ok) {
+      return normalizeLocally<T>(text, schema);
+    }
+    const data = await response.json() as { data: T };
+    return data.data;
+  } catch {
+    return normalizeLocally<T>(text, schema);
+  }
 };
 
 // Model Registry

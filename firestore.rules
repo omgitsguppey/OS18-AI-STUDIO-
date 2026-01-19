@@ -15,6 +15,12 @@ service cloud.firestore {
       allow read, write: if isSignedIn() && request.auth.uid == uid;
     }
 
+    // STORE COUNTERS (read-only for owner)
+    match /store_counters/{uid}/stores/{storeName}/shards/{shardId} {
+      allow read: if isSignedIn() && request.auth.uid == uid;
+      allow write: if false;
+    }
+
     // TELEMETRY (write-only for users)
     match /sys_telemetry/{document=**} {
       allow write: if isSignedIn();

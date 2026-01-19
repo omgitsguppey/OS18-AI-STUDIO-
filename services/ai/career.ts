@@ -1,6 +1,6 @@
 
 import { Type } from "@google/genai";
-import { getAIClient, APP_MODEL_CONFIG } from "./core";
+import { getAIClient, APP_MODEL_CONFIG, normalizeAiJson } from "./core";
 import { AppID } from "../../types";
 
 export interface CareerQuestion {
@@ -31,24 +31,26 @@ export const generateCareerQuestion = async (
 
   const prompt = `Current Timeline Summary: ${JSON.stringify(timelineSummary)}`;
 
+  const responseSchema = {
+    type: Type.OBJECT,
+    properties: {
+      question: { type: Type.STRING },
+      type: { type: Type.STRING, enum: ['text', 'choice', 'boolean'] },
+      options: { type: Type.ARRAY, items: { type: Type.STRING } },
+      context: { type: Type.STRING }
+    },
+    required: ['question', 'type', 'context']
+  };
+
   const response = await ai.models.generateContent({
     model: APP_MODEL_CONFIG[AppID.CAREER_AI],
     contents: prompt,
     config: {
       systemInstruction: systemInstruction,
       responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          question: { type: Type.STRING },
-          type: { type: Type.STRING, enum: ['text', 'choice', 'boolean'] },
-          options: { type: Type.ARRAY, items: { type: Type.STRING } },
-          context: { type: Type.STRING }
-        },
-        required: ['question', 'type', 'context']
-      }
+      responseSchema
     }
   });
 
-  return JSON.parse(response.text || '{}');
+  return normalizeAiJson<CareerQuestion>(response.text || '', responseSchema);
 };

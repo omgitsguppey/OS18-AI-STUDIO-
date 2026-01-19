@@ -1,6 +1,6 @@
 
 import { Type } from "@google/genai";
-import { getAIClient, fileToBase64, APP_MODEL_CONFIG } from "./core";
+import { getAIClient, fileToBase64, APP_MODEL_CONFIG, normalizeAiJson } from "./core";
 import { AppID } from "../../types";
 import { LocalIntelligence } from "../localIntelligence";
 
@@ -29,40 +29,42 @@ export const generateMarkupStrategy = async (niche: string): Promise<MarkupStrat
   Find 3-5 items (Affiliate, White Label, DFY).
   Provide marketing angles and pricing.`;
 
+  const responseSchema = {
+    type: Type.OBJECT,
+    properties: {
+      niche: { type: Type.STRING },
+      summary: { type: Type.STRING },
+      opportunities: {
+        type: Type.ARRAY,
+        items: {
+          type: Type.OBJECT,
+          properties: {
+            type: { type: Type.STRING, enum: ['Affiliate', 'White Label', 'DFY Service'] },
+            name: { type: Type.STRING },
+            provider: { type: Type.STRING },
+            description: { type: Type.STRING },
+            baseCost: { type: Type.STRING },
+            markupPrice: { type: Type.STRING },
+            profitMargin: { type: Type.STRING },
+            marketingAngle: { type: Type.STRING }
+          },
+          required: ['type', 'name', 'provider', 'description', 'baseCost', 'markupPrice', 'profitMargin', 'marketingAngle']
+        }
+      }
+    },
+    required: ['niche', 'summary', 'opportunities']
+  };
+
   const response = await ai.models.generateContent({
     model: APP_MODEL_CONFIG[AppID.MARKUP_AI],
     contents: prompt,
     config: {
       responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          niche: { type: Type.STRING },
-          summary: { type: Type.STRING },
-          opportunities: {
-            type: Type.ARRAY,
-            items: {
-              type: Type.OBJECT,
-              properties: {
-                type: { type: Type.STRING, enum: ['Affiliate', 'White Label', 'DFY Service'] },
-                name: { type: Type.STRING },
-                provider: { type: Type.STRING },
-                description: { type: Type.STRING },
-                baseCost: { type: Type.STRING },
-                markupPrice: { type: Type.STRING },
-                profitMargin: { type: Type.STRING },
-                marketingAngle: { type: Type.STRING }
-              },
-              required: ['type', 'name', 'provider', 'description', 'baseCost', 'markupPrice', 'profitMargin', 'marketingAngle']
-            }
-          }
-        },
-        required: ['niche', 'summary', 'opportunities']
-      }
+      responseSchema
     }
   });
 
-  return JSON.parse(response.text || '{}');
+  return normalizeAiJson<MarkupStrategy>(response.text || '', responseSchema);
 };
 
 // --- PRODUCT STRATEGY (JUST SELL IT) ---
@@ -98,54 +100,59 @@ export const generateProductStrategy = async (productName: string, modifiers: st
   Identify top 3 customer objections and rebuttals.
   Also estimate a "basePriceEstimate" (number) for this type of product in USD.`;
 
+  const responseSchema = {
+    type: Type.OBJECT,
+    properties: {
+      productName: { type: Type.STRING },
+      emotionalValueProp: { type: Type.STRING },
+      basePriceEstimate: { type: Type.NUMBER },
+      marketingChannels: { type: Type.ARRAY, items: { type: Type.STRING } },
+      painPoints: {
+        type: Type.ARRAY,
+        items: {
+          type: Type.OBJECT,
+          properties: { problem: { type: Type.STRING }, solution: { type: Type.STRING } },
+          required: ["problem", "solution"]
+        }
+      },
+      audience: {
+        type: Type.OBJECT,
+        properties: { demographics: { type: Type.STRING }, psychographics: { type: Type.STRING } },
+        required: ["demographics", "psychographics"]
+      },
+      salesFunnel: {
+        type: Type.ARRAY,
+        items: {
+            type: Type.OBJECT,
+            properties: { stage: { type: Type.STRING }, tactic: { type: Type.STRING } },
+            required: ["stage", "tactic"]
+        }
+      },
+      objections: {
+        type: Type.ARRAY,
+        items: {
+            type: Type.OBJECT,
+            properties: { objection: { type: Type.STRING }, rebuttal: { type: Type.STRING } },
+            required: ["objection", "rebuttal"]
+        }
+      }
+    },
+    required: ["productName", "emotionalValueProp", "basePriceEstimate", "painPoints", "audience", "marketingChannels", "salesFunnel", "objections"]
+  };
+
   const response = await ai.models.generateContent({
     model: APP_MODEL_CONFIG[AppID.SELL_IT],
     contents: prompt,
     config: {
       responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          productName: { type: Type.STRING },
-          emotionalValueProp: { type: Type.STRING },
-          basePriceEstimate: { type: Type.NUMBER },
-          marketingChannels: { type: Type.ARRAY, items: { type: Type.STRING } },
-          painPoints: {
-            type: Type.ARRAY,
-            items: {
-              type: Type.OBJECT,
-              properties: { problem: { type: Type.STRING }, solution: { type: Type.STRING } },
-              required: ["problem", "solution"]
-            }
-          },
-          audience: {
-            type: Type.OBJECT,
-            properties: { demographics: { type: Type.STRING }, psychographics: { type: Type.STRING } },
-            required: ["demographics", "psychographics"]
-          },
-          salesFunnel: {
-            type: Type.ARRAY,
-            items: {
-                type: Type.OBJECT,
-                properties: { stage: { type: Type.STRING }, tactic: { type: Type.STRING } },
-                required: ["stage", "tactic"]
-            }
-          },
-          objections: {
-            type: Type.ARRAY,
-            items: {
-                type: Type.OBJECT,
-                properties: { objection: { type: Type.STRING }, rebuttal: { type: Type.STRING } },
-                required: ["objection", "rebuttal"]
-            }
-          }
-        },
-        required: ["productName", "emotionalValueProp", "basePriceEstimate", "painPoints", "audience", "marketingChannels", "salesFunnel", "objections"]
-      }
+      responseSchema
     }
   });
 
-  const data = JSON.parse(response.text || '{}');
+  const data = await normalizeAiJson<ProductStrategy & { basePriceEstimate: number }>(
+    response.text || '',
+    responseSchema
+  );
   
   // Calculate pricing tiers deterministically
   const pricing = LocalIntelligence.calculatePricingTiers(data.basePriceEstimate || 50);
@@ -184,6 +191,23 @@ export const parseRevenueFile = async (file: File): Promise<Omit<RevenueRecord, 
   const systemInstruction = `Extract revenue data from this document.
   Return JSON array with: date (YYYY-MM-DD), label, trackTitle, artist, platform, revenueAmount (number), currency.`;
 
+  const responseSchema = {
+    type: Type.ARRAY,
+    items: {
+      type: Type.OBJECT,
+      properties: {
+        date: { type: Type.STRING },
+        label: { type: Type.STRING },
+        trackTitle: { type: Type.STRING },
+        artist: { type: Type.STRING },
+        platform: { type: Type.STRING },
+        revenueAmount: { type: Type.NUMBER },
+        currency: { type: Type.STRING }
+      },
+      required: ['date', 'label', 'trackTitle', 'artist', 'platform', 'revenueAmount', 'currency']
+    }
+  };
+
   const response = await ai.models.generateContent({
     model: APP_MODEL_CONFIG[AppID.ANALYTICS_AI],
     contents: {
@@ -196,24 +220,9 @@ export const parseRevenueFile = async (file: File): Promise<Omit<RevenueRecord, 
     config: {
       systemInstruction: systemInstruction,
       responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.ARRAY,
-        items: {
-          type: Type.OBJECT,
-          properties: {
-            date: { type: Type.STRING },
-            label: { type: Type.STRING },
-            trackTitle: { type: Type.STRING },
-            artist: { type: Type.STRING },
-            platform: { type: Type.STRING },
-            revenueAmount: { type: Type.NUMBER },
-            currency: { type: Type.STRING }
-          },
-          required: ['date', 'label', 'trackTitle', 'artist', 'platform', 'revenueAmount', 'currency']
-        }
-      }
+      responseSchema
     }
   });
 
-  return JSON.parse(response.text || '[]');
+  return normalizeAiJson<Omit<RevenueRecord, 'id'>[]>(response.text || '', responseSchema);
 };

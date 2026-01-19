@@ -1,6 +1,6 @@
 
 import { Type } from "@google/genai";
-import { getAIClient, APP_MODEL_CONFIG } from "./core";
+import { getAIClient, APP_MODEL_CONFIG, normalizeAiJson } from "./core";
 import { AppID } from "../../types";
 
 export interface ShortConcept {
@@ -25,33 +25,38 @@ export const generateShortsConcepts = async (
   The 'visualPrompt' must be descriptive, focused on movement and aesthetics, suitable for a video generation model.
   Keep prompts under 40 words. Focus on visual loops, satisfying motion, or atmospheric scenes.`;
 
+  const responseSchema = {
+    type: Type.OBJECT,
+    properties: {
+      concepts: {
+        type: Type.ARRAY,
+        items: {
+          type: Type.OBJECT,
+          properties: {
+            title: { type: Type.STRING },
+            visualPrompt: { type: Type.STRING }
+          },
+          required: ['title', 'visualPrompt']
+        }
+      }
+    },
+    required: ['concepts']
+  };
+
   const response = await ai.models.generateContent({
     model: APP_MODEL_CONFIG[AppID.SHORTS_STUDIO],
     contents: "Generate 3 video concepts.",
     config: {
       systemInstruction,
       responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          concepts: {
-            type: Type.ARRAY,
-            items: {
-              type: Type.OBJECT,
-              properties: {
-                title: { type: Type.STRING },
-                visualPrompt: { type: Type.STRING }
-              },
-              required: ['title', 'visualPrompt']
-            }
-          }
-        },
-        required: ['concepts']
-      }
+      responseSchema
     }
   });
 
-  const data = JSON.parse(response.text || '{}');
+  const data = await normalizeAiJson<{ concepts: Array<{ title: string; visualPrompt: string }> }>(
+    response.text || '',
+    responseSchema
+  );
   return (data.concepts || []).map((c: any) => ({
     ...c,
     id: Date.now().toString() + Math.random().toString().slice(2, 5),
