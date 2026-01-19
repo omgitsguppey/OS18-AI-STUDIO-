@@ -2,6 +2,7 @@
 import { GoogleGenAI, GenerateContentResponse } from "@google/genai";
 import { AppID } from "../../types";
 import { systemCore } from "../systemCore";
+import { getCachedPolicy } from "../systemPolicyService";
 import { auth } from "../firebaseConfig";
 
 // Centralized API Client
@@ -158,11 +159,20 @@ export const generateOptimizedContent = async (
     config: any = {},
     isRegen: boolean = false
 ): Promise<GenerateContentResponse> => {
+    const policy = await getCachedPolicy();
+    if (policy?.tokenPolicy?.killSwitchEnabled) {
+      throw new Error("AI generation is currently disabled.");
+    }
     const ai = getAIClient();
     const model = APP_MODEL_CONFIG[appId] || 'gemini-flash-lite-latest';
     
     // 1. Telemetry: Track the request
-    systemCore.trackInteraction(appId, isRegen ? 'regenerate' : 'generate');
+    void systemCore.trackEvent({
+      appId,
+      context: 'generation',
+      eventType: isRegen ? 'regenerate' : 'generate',
+      label: isRegen ? 'regenerate' : 'generate'
+    });
 
     // 2. Intelligence: Dynamic Temperature
     const dynamicTemp = systemCore.getDynamicTemperature();
@@ -203,12 +213,24 @@ export const generateOptimizedContent = async (
         // Log completion for real metrics
         const outputLength = response.text?.length || 0;
         const inputLength = JSON.stringify(finalContents).length;
-        systemCore.trackInteraction(appId, 'completion', { inputLength, outputLength, latency: Date.now() - start });
+        void systemCore.trackEvent({
+          appId,
+          context: 'generation',
+          eventType: 'performance',
+          label: 'completion',
+          meta: { inputLength, outputLength, latencyMs: Date.now() - start }
+        });
         
         return response;
     } catch (e: any) {
         // Log failure
-        systemCore.trackInteraction(appId, 'error', { error: e.message });
+        void systemCore.trackEvent({
+          appId,
+          context: 'generation',
+          eventType: 'error',
+          label: 'generation_error',
+          meta: { messageLength: typeof e?.message === 'string' ? e.message.length : 0 }
+        });
         throw e;
     }
 };

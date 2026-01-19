@@ -120,7 +120,12 @@ const AlbumsAI: React.FC<AlbumsAIProps> = ({ onNavigate }) => {
     setAlbums([...albums, newAlbum]);
     setNewAlbumTitle('');
     setView('artist-detail');
-    systemCore.trackInteraction('ALBUMS_AI', 'sys_event', { label: 'create_album' });
+    void systemCore.trackEvent({
+      appId: AppID.ALBUMS_AI,
+      context: 'action',
+      eventType: 'click',
+      label: 'create_album'
+    });
   };
 
   const toggleSongInAlbum = (albumId: string, songTitle: string) => {
@@ -165,7 +170,13 @@ const AlbumsAI: React.FC<AlbumsAIProps> = ({ onNavigate }) => {
               setAlbums(prev => prev.map(a => 
                   a.id === selectedAlbum.id ? { ...a, coverArt: base64 } : a
               ));
-              systemCore.trackInteraction('ALBUMS_AI', 'generate', { type: 'cover_art' });
+              void systemCore.trackEvent({
+                appId: AppID.ALBUMS_AI,
+                context: 'generation',
+                eventType: 'generate',
+                label: 'cover_art',
+                meta: { songCount: selectedAlbum.songTitles.length }
+              });
           } else {
               alert("Generation failed.");
           }

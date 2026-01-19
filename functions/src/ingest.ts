@@ -9,30 +9,37 @@ const MAX_PAYLOAD_BYTES = 64 * 1024;
 const MAX_EVENTS = 50;
 const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_MAX = 60;
-const ALLOWED_ACTIONS = new Set([
+const ALLOWED_EVENT_TYPES = new Set([
   "open",
+  "close",
+  "navigation",
+  "click",
+  "input",
+  "error",
+  "performance",
+  "save",
+  "delete",
   "generate",
   "regenerate",
-  "edit",
-  "copy",
   "download",
+  "copy",
   "dwell",
-  "abandon",
+  "install",
+  "import",
+  "export",
+  "submit",
   "success",
-  "dislike",
-  "completion",
-  "error",
-  "sys_event",
-  "install_app",
-  "open_app",
 ]);
 
 type TelemetryEvent = {
+  uid?: string;
+  sessionId: string;
   appId: string;
-  action: string;
+  context: string;
+  eventType: string;
+  label: string;
   timestamp: number;
-  metadata?: Record<string, unknown> | null;
-  score?: number;
+  meta?: Record<string, unknown> | null;
 };
 
 const isPlainObject = (value: unknown): value is Record<string, unknown> =>
@@ -51,6 +58,46 @@ const parsePayload = (payload: unknown): Record<string, unknown> | null => {
   return isPlainObject(payload) ? payload : null;
 };
 
+const MAX_LABEL_LENGTH = 80;
+const MAX_CONTEXT_LENGTH = 60;
+const MAX_SESSION_LENGTH = 120;
+const MAX_META_KEYS = 20;
+
+const isSafeMetaKey = (key: string) => {
+  const lowered = key.toLowerCase();
+  return !(
+    lowered.includes("password") ||
+    lowered.includes("secret") ||
+    lowered.includes("clipboard") ||
+    lowered.includes("email") ||
+    lowered.includes("content")
+  );
+};
+
+const normalizeMeta = (
+  value: unknown
+): Record<string, unknown> | null => {
+  if (value === null || value === undefined) return null;
+  if (!isPlainObject(value)) return null;
+  const entries = Object.entries(value).slice(0, MAX_META_KEYS);
+  const sanitized: Record<string, unknown> = {};
+  for (const [key, entry] of entries) {
+    if (!isSafeMetaKey(key)) return null;
+    if (typeof entry === "string") {
+      sanitized[key] = entry.slice(0, 120);
+    } else if (typeof entry === "number" || typeof entry === "boolean") {
+      sanitized[key] = entry;
+    } else if (Array.isArray(entry)) {
+      sanitized[key] = entry.slice(0, 10).map((item) => {
+        if (typeof item === "string") return item.slice(0, 60);
+        if (typeof item === "number" || typeof item === "boolean") return item;
+        return null;
+      });
+    }
+  }
+  return sanitized;
+};
+
 const normalizeEvents = (events: unknown): TelemetryEvent[] | null => {
   if (!Array.isArray(events) || events.length === 0 || events.length > MAX_EVENTS) {
     return null;
@@ -60,25 +107,28 @@ const normalizeEvents = (events: unknown): TelemetryEvent[] | null => {
   for (const entry of events) {
     if (!isPlainObject(entry)) return null;
     const appId = entry.appId;
-    const action = entry.action;
+    const sessionId = entry.sessionId;
+    const context = entry.context;
+    const eventType = entry.eventType;
+    const label = entry.label;
     const timestamp = entry.timestamp;
-    const metadata = entry.metadata;
-    const score = entry.score;
+    const meta = normalizeMeta(entry.meta);
 
     if (typeof appId !== "string" || appId.length === 0) return null;
-    if (typeof action !== "string" || !ALLOWED_ACTIONS.has(action)) return null;
+    if (typeof sessionId !== "string" || sessionId.length === 0 || sessionId.length > MAX_SESSION_LENGTH) return null;
+    if (typeof context !== "string" || context.length === 0 || context.length > MAX_CONTEXT_LENGTH) return null;
+    if (typeof eventType !== "string" || !ALLOWED_EVENT_TYPES.has(eventType)) return null;
+    if (typeof label !== "string" || label.length === 0 || label.length > MAX_LABEL_LENGTH) return null;
     if (typeof timestamp !== "number" || !Number.isFinite(timestamp)) return null;
-    if (metadata !== undefined && metadata !== null && !isPlainObject(metadata)) return null;
-    if (score !== undefined && (typeof score !== "number" || !Number.isFinite(score))) {
-      return null;
-    }
 
     normalized.push({
       appId,
-      action,
+      sessionId,
+      context,
+      eventType,
+      label,
       timestamp,
-      metadata: metadata ?? null,
-      score: typeof score === "number" ? score : undefined,
+      meta,
     });
   }
 
@@ -86,8 +136,84 @@ const normalizeEvents = (events: unknown): TelemetryEvent[] | null => {
 };
 
 const countRateLimitedEvents = (events: TelemetryEvent[]): number =>
-  events.filter((event) => event.action === "generate" || event.action === "regenerate")
+  events.filter((event) => event.eventType === "generate" || event.eventType === "regenerate")
     .length;
+
+const formatDateKey = (timestamp: number) => {
+  const date = new Date(timestamp);
+  return date.toISOString().slice(0, 10);
+};
+
+const updateTelemetryStats = async (userId: string, events: TelemetryEvent[]) => {
+  const db = admin.firestore();
+  const now = admin.firestore.FieldValue.serverTimestamp();
+  const dateKey = formatDateKey(Date.now());
+  const dailyRef = db.collection("stats").doc("telemetry").collection("daily").doc(dateKey);
+  const healthRef = db.collection("stats").doc("system").collection("health").doc("summary");
+  const userSummaryRef = db.collection("stats_users").doc(userId);
+
+  const appCounts: Record<string, number> = {};
+  const appErrors: Record<string, number> = {};
+  const appTti: Record<string, number> = {};
+
+  events.forEach((event) => {
+    appCounts[event.appId] = (appCounts[event.appId] || 0) + 1;
+    if (event.eventType === "error") {
+      appErrors[event.appId] = (appErrors[event.appId] || 0) + 1;
+    }
+    if (event.eventType === "performance" && event.label === "time_to_interactive") {
+      const tti = event.meta?.ttiMs;
+      if (typeof tti === "number" && Number.isFinite(tti)) {
+        appTti[event.appId] = Math.max(appTti[event.appId] || 0, tti);
+      }
+    }
+  });
+
+  await db.runTransaction(async (t) => {
+    t.set(
+      dailyRef,
+      {
+        eventCount: admin.firestore.FieldValue.increment(events.length),
+        lastIngestAt: now,
+      },
+      {merge: true}
+    );
+    t.set(
+      healthRef,
+      {
+        lastIngestAt: now,
+        lastUserId: userId,
+      },
+      {merge: true}
+    );
+    t.set(
+      userSummaryRef,
+      {
+        uid: userId,
+        telemetryCount: admin.firestore.FieldValue.increment(events.length),
+        lastTelemetryAt: now,
+        updatedAt: now
+      },
+      {merge: true}
+    );
+
+    Object.entries(appCounts).forEach(([appId, count]) => {
+      const ref = db.collection("stats").doc("telemetry").collection("apps").doc(appId);
+      const errorCount = appErrors[appId] || 0;
+      const tti = appTti[appId];
+      t.set(
+        ref,
+        {
+          eventCount: admin.firestore.FieldValue.increment(count),
+          errorCount: admin.firestore.FieldValue.increment(errorCount),
+          lastEventAt: now,
+          lastTtiMs: typeof tti === "number" ? tti : admin.firestore.FieldValue.delete()
+        },
+        {merge: true}
+      );
+    });
+  });
+};
 
 const enforceRateLimit = async (
   userId: string,
@@ -164,7 +290,10 @@ export const ingest = onRequest(
       return;
     }
 
-    const token = extractBearerToken(req.headers.authorization);
+    const payload = parsePayload(req.body);
+    const headerToken = extractBearerToken(req.headers.authorization);
+    const bodyToken = isPlainObject(payload) ? payload.token : null;
+    const token = headerToken || (typeof bodyToken === "string" ? bodyToken : null);
     if (!token) {
       res.status(401).send("Unauthorized");
       return;
@@ -183,7 +312,6 @@ export const ingest = onRequest(
       return;
     }
 
-    const payload = parsePayload(req.body);
     if (!payload) {
       res.status(400).send("Invalid Payload");
       return;
@@ -203,15 +331,26 @@ export const ingest = onRequest(
     }
 
     try {
-      await admin.firestore().collection("telemetry_queue").add({
+      const sessionId = events[0]?.sessionId;
+      const batchRef = admin.firestore()
+        .collection("telemetry_sessions")
+        .doc(decodedUserId)
+        .collection("sessions")
+        .doc(sessionId)
+        .collection("batches")
+        .doc();
+
+      await batchRef.set({
         userId: decodedUserId,
+        sessionId,
         events,
+        eventCount: events.length,
         ip: req.ip,
         userAgent: req.get("User-Agent"),
         clientTimestamp: Date.now(),
-        processed: false,
         serverTimestamp: admin.firestore.FieldValue.serverTimestamp(),
       });
+      await updateTelemetryStats(decodedUserId, events);
 
       res.status(200).json({success: true, queued: events.length});
     } catch (error) {

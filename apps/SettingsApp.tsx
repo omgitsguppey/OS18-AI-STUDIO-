@@ -1,11 +1,12 @@
-import React, { useState, useEffect, useCallback, memo, useRef } from 'react';
+import React, { useState, useEffect, useCallback, memo, useRef, useMemo } from 'react';
 import { 
   Bell, Volume2, Moon, Settings as SettingsIcon, Type, 
   LayoutGrid, Activity, Hand, ChevronRight, 
   ArrowLeft, Brain, Terminal,
   Radio, Shield, User as UserIcon,
   Database, Zap, Hammer,
-  Sun, Server, Play, Check, Eye, Mic, Battery
+  Sun, Server, Play, Check, Eye, Mic, Battery,
+  Users, Gauge, KeyRound
 } from 'lucide-react';
 import { storage, STORES, StoreStats } from '../services/storageService';
 import { systemCore } from '../services/systemCore';
@@ -15,10 +16,47 @@ import { auth } from '../services/firebaseConfig';
 import { User } from 'firebase/auth';
 import { AppID } from '../types';
 import { ALL_APPS, WALLPAPERS } from '../constants';
+import {
+  getAppStats,
+  getSystemHealth,
+  getSystemPolicy,
+  getTelemetryAppStats,
+  getTelemetryDaily,
+  getUserAppStats,
+  getUserSummaries,
+  getUserTokenPolicy,
+  getTotalUsersCount,
+  updateSystemPolicy,
+  updateUserTokenPolicy,
+  type TelemetryAppStats,
+  type UserSummary
+} from '../services/adminDataService';
+import type { SystemPolicy } from '../types';
 
 // --- Types & Defaults ---
 
-type View = 'main' | 'general' | 'display' | 'notifications' | 'sounds' | 'focus' | 'privacy' | 'developer' | 'wallpaper' | 'gemini' | 'about' | 'storage' | 'backend' | 'profile' | 'app_detail' | 'power';
+type View =
+  | 'main'
+  | 'general'
+  | 'display'
+  | 'notifications'
+  | 'sounds'
+  | 'focus'
+  | 'privacy'
+  | 'developer'
+  | 'wallpaper'
+  | 'gemini'
+  | 'about'
+  | 'storage'
+  | 'backend'
+  | 'profile'
+  | 'app_detail'
+  | 'power'
+  | 'admin_home'
+  | 'admin_users'
+  | 'admin_apps'
+  | 'admin_tokens'
+  | 'admin_performance';
 
 interface SettingsState {
   darkMode: boolean;
@@ -89,9 +127,9 @@ const STORE_APP_MAP: Record<string, AppID> = {
 // --- UI Components ---
 
 const Toggle = memo(({ value, onChange }: { value: boolean, onChange: (v: boolean) => void }) => (
-  <div 
+  <div
     onClick={(e) => { e.stopPropagation(); onChange(!value); }}
-    className={`w-[50px] h-[30px] rounded-full p-[2px] transition-colors duration-300 cursor-pointer ${value ? 'bg-[#34C759]' : 'bg-[#E9E9EA] dark:bg-[#39393D]'}`}
+    className={`w-[50px] h-[30px] rounded-full p-[2px] transition-colors duration-300 cursor-pointer ${value ? 'bg-[#34C759]' : 'bg-white/40 dark:bg-white/10 border border-white/30 dark:border-white/10'}`}
   >
     <div className={`w-[26px] h-[26px] bg-white rounded-full shadow-md transform transition-transform duration-300 ${value ? 'translate-x-[20px]' : 'translate-x-0'}`} />
   </div>
@@ -120,9 +158,9 @@ const ListItem = memo(({
   destructive = false,
   subtitle
 }: any) => (
-  <div 
+  <div
     onClick={onClick}
-    className={`flex items-center justify-between px-4 py-3 min-h-[44px] bg-white dark:bg-[#1C1C1E] active:bg-gray-100 dark:active:bg-[#2C2C2E] transition-colors ${onClick || isLink ? 'cursor-pointer' : ''}`}
+    className={`flex items-center justify-between px-4 py-3 min-h-[44px] bg-white/70 dark:bg-white/5 backdrop-blur-xl border border-white/40 dark:border-white/10 active:bg-white/80 dark:active:bg-white/10 transition-colors ${onClick || isLink ? 'cursor-pointer' : ''}`}
   >
     <div className="flex items-center gap-3 min-w-0">
       {Icon && (
@@ -147,16 +185,20 @@ const ListItem = memo(({
 
 const ListGroup = ({ title, footer, children }: any) => (
   <div className="mb-6">
-    {title && <h3 className="px-4 mb-2 text-[13px] text-gray-500 uppercase font-medium ml-4">{title}</h3>}
-    <div className="mx-4 overflow-hidden rounded-[10px] divide-y divide-gray-200 dark:divide-white/10 border border-gray-200 dark:border-transparent">
+    {title && <h3 className="px-4 mb-2 text-[12px] text-gray-500 uppercase font-medium ml-4 tracking-widest">{title}</h3>}
+    <div className="mx-4 overflow-hidden rounded-[16px] divide-y divide-white/30 dark:divide-white/10 border border-white/40 dark:border-white/10 shadow-[0_8px_24px_rgba(0,0,0,0.08)]">
       {children}
     </div>
     {footer && <p className="px-4 mt-2 text-[13px] text-gray-500 leading-normal ml-4">{footer}</p>}
   </div>
 );
 
+const SkeletonBlock = ({ className }: { className?: string }) => (
+  <div className={`animate-pulse rounded-xl bg-white/60 dark:bg-white/10 ${className ?? ''}`} />
+);
+
 const Header = memo(({ title, canGoBack, onBack }: { title: string, canGoBack: boolean, onBack: () => void }) => (
-    <div className="h-[52px] bg-[#F2F2F7] dark:bg-black sticky top-0 z-20 flex items-center px-2 border-b border-gray-200 dark:border-white/10 shrink-0 backdrop-blur-xl bg-opacity-90 dark:bg-opacity-90">
+    <div className="h-[56px] bg-white/70 dark:bg-black/60 sticky top-0 z-20 flex items-center px-2 border-b border-white/40 dark:border-white/10 shrink-0 backdrop-blur-2xl">
       <div className="flex-1">
         {canGoBack && (
           <button 
@@ -176,15 +218,21 @@ const Header = memo(({ title, canGoBack, onBack }: { title: string, canGoBack: b
 
 const MainView = ({ user, isAdmin, sysMetrics, pushView }: any) => (
     <div className="animate-slide-up pb-10">
-      <div className="px-4 pt-6 pb-4">
-        <h1 className="text-[34px] font-bold text-black dark:text-white tracking-tight">Settings</h1>
+      <div className="px-4 pt-8 pb-4">
+        <div className="flex items-center justify-between">
+          <h1 className="text-[34px] font-bold text-black dark:text-white tracking-tight">Settings</h1>
+          {isAdmin && (
+            <span className="px-3 py-1 rounded-full text-[11px] uppercase tracking-widest bg-blue-500/15 text-blue-500 font-semibold">Admin</span>
+          )}
+        </div>
+        <p className="text-sm text-gray-500 mt-1">OS 18 Control Center</p>
       </div>
 
-      <div 
+      <div
         onClick={() => pushView('profile')}
-        className="mx-4 mb-8 flex items-center gap-4 p-4 bg-white dark:bg-[#1C1C1E] rounded-[12px] border border-gray-200 dark:border-transparent active:bg-gray-50 dark:active:bg-[#2C2C2E] transition-colors cursor-pointer"
+        className="mx-4 mb-8 flex items-center gap-4 p-4 bg-white/70 dark:bg-white/5 rounded-[18px] border border-white/40 dark:border-white/10 backdrop-blur-xl shadow-[0_12px_30px_rgba(0,0,0,0.12)] active:scale-[0.99] transition-all cursor-pointer"
       >
-        <div className="w-[60px] h-[60px] rounded-full bg-gray-200 dark:bg-gray-700 overflow-hidden flex items-center justify-center text-white text-2xl font-bold shadow-sm shrink-0">
+        <div className="w-[60px] h-[60px] rounded-full bg-gradient-to-br from-white/80 to-white/30 dark:from-white/20 dark:to-white/5 overflow-hidden flex items-center justify-center text-white text-2xl font-bold shadow-sm shrink-0">
           {user?.photoURL ? (
               <img src={user.photoURL} alt="User" className="w-full h-full object-cover" />
           ) : (
@@ -198,42 +246,61 @@ const MainView = ({ user, isAdmin, sysMetrics, pushView }: any) => (
         <ChevronRight size={20} className="text-gray-400" />
       </div>
 
-      <ListGroup>
-        <ListItem 
-            icon={Brain} 
-            color="bg-indigo-600" 
-            label="Gemini Intelligence" 
-            onClick={() => pushView('gemini')} 
-            value={sysMetrics ? `${sysMetrics.facts} Memories` : 'Active'} 
-            isLink 
+      {isAdmin && (
+        <div className="mx-4 mb-6">
+          <div className="rounded-[20px] bg-gradient-to-br from-blue-500/15 via-indigo-500/10 to-purple-500/10 border border-white/40 dark:border-white/10 backdrop-blur-xl p-5 shadow-[0_20px_40px_rgba(0,0,0,0.15)]">
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-xs uppercase tracking-widest text-blue-500 font-semibold">God Mode</div>
+                <h3 className="text-xl font-semibold text-black dark:text-white">Admin Playground</h3>
+                <p className="text-sm text-gray-500 mt-1">Telemetry, quotas, models, and system health.</p>
+              </div>
+              <button onClick={() => pushView('admin_home')} className="px-4 py-2 rounded-full bg-blue-500 text-white text-sm font-semibold shadow-lg shadow-blue-500/40">Open</button>
+            </div>
+            <div className="mt-4 grid grid-cols-3 gap-3 text-xs text-gray-500">
+              <div>
+                <div className="text-gray-400">Telemetry</div>
+                <div className="text-black dark:text-white font-semibold">{sysMetrics ? `${sysMetrics.interactions}` : '--'}</div>
+              </div>
+              <div>
+                <div className="text-gray-400">Memories</div>
+                <div className="text-black dark:text-white font-semibold">{sysMetrics ? `${sysMetrics.facts}` : '--'}</div>
+              </div>
+              <div>
+                <div className="text-gray-400">Tokens</div>
+                <div className="text-black dark:text-white font-semibold">{sysMetrics ? `${sysMetrics.totalTokens}` : '--'}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <ListGroup title="Core">
+        <ListItem
+            icon={Brain}
+            color="bg-indigo-600"
+            label="Gemini Intelligence"
+            onClick={() => pushView('gemini')}
+            value={sysMetrics ? `${sysMetrics.facts} Memories` : 'Active'}
+            isLink
         />
-        {isAdmin && (
-            <ListItem 
-                icon={Terminal} 
-                color="bg-black border border-white/20" 
-                label="Neural Backend" 
-                onClick={() => pushView('backend')} 
-                value="God Mode"
-                isLink 
-            />
-        )}
       </ListGroup>
 
-      <ListGroup>
+      <ListGroup title="Personalization">
         <ListItem icon={SettingsIcon} color="bg-[#8E8E93]" label="General" onClick={() => pushView('general')} isLink />
         <ListItem icon={Type} color="bg-[#007AFF]" label="Display & Brightness" onClick={() => pushView('display')} isLink />
         <ListItem icon={LayoutGrid} color="bg-[#32ADE6]" label="Wallpaper" onClick={() => pushView('wallpaper')} isLink />
         <ListItem icon={Database} color="bg-[#ff9f0a]" label="Storage & Apps" onClick={() => pushView('storage')} isLink />
       </ListGroup>
 
-      <ListGroup>
+      <ListGroup title="System">
         <ListItem icon={Bell} color="bg-[#FF3B30]" label="Notifications" onClick={() => pushView('notifications')} isLink />
         <ListItem icon={Volume2} color="bg-[#FF2D55]" label="Sounds & Haptics" onClick={() => pushView('sounds')} isLink />
         <ListItem icon={Moon} color="bg-[#5856D6]" label="Focus" onClick={() => pushView('focus')} value="Personal" isLink />
         <ListItem icon={Battery} color="bg-[#34C759]" label="Battery" onClick={() => pushView('power')} isLink />
       </ListGroup>
 
-      <ListGroup>
+      <ListGroup title="Security">
         <ListItem icon={Hand} color="bg-[#007AFF]" label="Privacy & Security" onClick={() => pushView('privacy')} isLink />
         <ListItem icon={Hammer} color="bg-[#8E8E93]" label="Developer" onClick={() => pushView('developer')} isLink />
       </ListGroup>
@@ -301,7 +368,7 @@ const WallpaperView = ({ settings, updateSetting, currentWallpaperId, onWallpape
                     {allWallpapers.map(wp => (
                         <button 
                             key={wp.id}
-                            onClick={() => onWallpaperChange(wp.id)}
+                            onClick={() => onWallpaperChange(wp)}
                             className={`relative aspect-[3/5] rounded-xl overflow-hidden border-2 transition-all ${currentWallpaperId === wp.id ? 'border-blue-500 scale-105' : 'border-transparent hover:scale-105'}`}
                         >
                             <div 
@@ -320,38 +387,45 @@ const WallpaperView = ({ settings, updateSetting, currentWallpaperId, onWallpape
     );
 };
 
-const StorageView = ({ storeStats, user, formatBytes, installedApps, handleSelectApp }: any) => (
+const StorageView = ({ storeStats, formatBytes, installedApps, handleSelectApp }: any) => (
     <div className="p-6 space-y-4 animate-slide-up">
         <h3 className="font-bold text-gray-500 text-xs uppercase tracking-widest">System Storage</h3>
-        <div className="bg-[#1c1c1e] p-6 rounded-xl border border-white/5 text-center mb-6">
-            <Database size={32} className="mx-auto text-blue-500 mb-2" />
-            <h2 className="text-xl font-bold">Cloud Database</h2>
-            <div className="flex justify-center gap-4 mt-2 text-sm">
-                <span className="text-gray-400">{formatBytes(storeStats.reduce((acc: number, curr: any) => acc + curr.sizeBytes, 0))} Used</span>
-                <span className="text-gray-600">Encrypted</span>
+        {storeStats.length === 0 ? (
+          <div className="space-y-4">
+            <SkeletonBlock className="h-24 w-full" />
+            <SkeletonBlock className="h-16 w-full" />
+          </div>
+        ) : (
+          <>
+            <div className="bg-white/70 dark:bg-white/5 p-6 rounded-[20px] border border-white/40 dark:border-white/10 text-center mb-6 backdrop-blur-xl shadow-[0_12px_24px_rgba(0,0,0,0.12)]">
+                <Database size={32} className="mx-auto text-blue-500 mb-2" />
+                <h2 className="text-xl font-bold">Cloud Database</h2>
+                <div className="flex justify-center gap-4 mt-2 text-sm text-gray-500">
+                    <span>{formatBytes(storeStats.reduce((acc: number, curr: any) => acc + curr.sizeBytes, 0))} Used</span>
+                    <span>Encrypted</span>
+                </div>
             </div>
-        </div>
 
-        {/* Visual Storage Bar */}
-        <div className="bg-[#1c1c1e] p-4 rounded-xl border border-white/5 mb-6">
-             <div className="flex justify-between text-xs font-bold text-gray-400 mb-2">
-                 <span>USAGE BREAKDOWN</span>
-             </div>
-             <div className="w-full h-4 bg-gray-700 rounded-full overflow-hidden flex">
-                 {storeStats.map((stat: any, i: number) => (
-                     <div 
-                        key={stat.name} 
-                        style={{ width: `${Math.max(1, (stat.sizeBytes / 5000) * 100)}%` }} 
-                        className={`h-full ${['bg-blue-500', 'bg-green-500', 'bg-yellow-500', 'bg-red-500', 'bg-purple-500'][i % 5]}`} 
-                     />
-                 ))}
-             </div>
-        </div>
+            <div className="bg-white/70 dark:bg-white/5 p-4 rounded-[20px] border border-white/40 dark:border-white/10 mb-6 backdrop-blur-xl">
+                 <div className="flex justify-between text-xs font-bold text-gray-400 mb-2">
+                     <span>USAGE BREAKDOWN</span>
+                 </div>
+                 <div className="w-full h-4 bg-white/40 dark:bg-white/10 rounded-full overflow-hidden flex">
+                     {storeStats.map((stat: any, i: number) => (
+                         <div 
+                            key={stat.name} 
+                            style={{ width: `${Math.max(1, (stat.sizeBytes / 5000) * 100)}%` }} 
+                            className={`h-full ${['bg-blue-500', 'bg-green-500', 'bg-yellow-500', 'bg-red-500', 'bg-purple-500'][i % 5]}`} 
+                         />
+                     ))}
+                 </div>
+            </div>
+          </>
+        )}
 
         <ListGroup title="Installed Apps">
             {installedApps.map((appId: AppID) => {
                 const app = ALL_APPS[appId];
-                // Find matching store stat if any (Reverse lookup or filter)
                 const storeKey = Object.keys(STORE_APP_MAP).find(key => STORE_APP_MAP[key] === appId);
                 const stat = storeKey ? storeStats.find((s: any) => s.name === storeKey) : null;
                 const size = stat ? stat.sizeBytes : 0;
@@ -362,7 +436,7 @@ const StorageView = ({ storeStats, user, formatBytes, installedApps, handleSelec
                         label={app.name}
                         icon={app.icon}
                         color={`bg-gradient-to-br ${app.color}`}
-                        value={formatBytes(size + 20000)} // Fake base size + real data
+                        value={formatBytes(size + 20000)}
                         onClick={() => handleSelectApp(appId, size)}
                         isLink
                     />
@@ -416,6 +490,346 @@ const AppDetailView = ({ selectedAppId, selectedAppSize, formatBytes, handleUnin
     );
 };
 
+const AdminHomeView = memo(({ policy, telemetryDaily, appStats, systemHealth, totalUsers, pushView, formatBytes }: any) => {
+    const totalStorage = Object.values(appStats || {}).reduce((sum: number, stat: any) => sum + (stat.sizeBytes || 0), 0);
+    const lastIngest = systemHealth?.lastIngestAt ? new Date(systemHealth.lastIngestAt).toLocaleString() : '—';
+    return (
+      <div className="animate-slide-up space-y-6 pb-20 pt-6">
+        <div className="mx-4 grid grid-cols-2 gap-4">
+          <div className="rounded-[18px] p-4 bg-white/70 dark:bg-white/5 backdrop-blur-xl border border-white/40 dark:border-white/10">
+            <div className="text-xs uppercase tracking-widest text-gray-400">Total Users</div>
+            <div className="text-2xl font-semibold text-black dark:text-white mt-1">{totalUsers ?? '--'}</div>
+          </div>
+          <div className="rounded-[18px] p-4 bg-white/70 dark:bg-white/5 backdrop-blur-xl border border-white/40 dark:border-white/10">
+            <div className="text-xs uppercase tracking-widest text-gray-400">Events Today</div>
+            <div className="text-2xl font-semibold text-black dark:text-white mt-1">{telemetryDaily?.eventCount ?? '--'}</div>
+          </div>
+          <div className="rounded-[18px] p-4 bg-white/70 dark:bg-white/5 backdrop-blur-xl border border-white/40 dark:border-white/10">
+            <div className="text-xs uppercase tracking-widest text-gray-400">Storage Used</div>
+            <div className="text-2xl font-semibold text-black dark:text-white mt-1">{formatBytes(totalStorage)}</div>
+          </div>
+          <div className="rounded-[18px] p-4 bg-white/70 dark:bg-white/5 backdrop-blur-xl border border-white/40 dark:border-white/10">
+            <div className="text-xs uppercase tracking-widest text-gray-400">Last Ingest</div>
+            <div className="text-sm font-semibold text-black dark:text-white mt-1">{lastIngest}</div>
+          </div>
+        </div>
+
+      <ListGroup title="Admin Panels">
+        <ListItem icon={Users} color="bg-blue-500" label="Users" onClick={() => pushView('admin_users')} isLink />
+        <ListItem icon={Database} color="bg-indigo-500" label="Apps & Storage" onClick={() => pushView('admin_apps')} isLink />
+        <ListItem icon={KeyRound} color="bg-emerald-500" label="Token Policy" onClick={() => pushView('admin_tokens')} isLink />
+        <ListItem icon={Gauge} color="bg-purple-500" label="Performance" onClick={() => pushView('admin_performance')} isLink />
+        <ListItem icon={Terminal} color="bg-black border border-white/20" label="Neural Console" onClick={() => pushView('backend')} value="Live" isLink />
+      </ListGroup>
+
+        <ListGroup title="Global Model Mapping" footer="Derived from system policy. No AI calls are executed from this view.">
+          {policy ? Object.entries(policy.modelMapping).slice(0, 6).map(([appId, model]) => (
+            <ListItem key={appId} label={appId.replace(/_/g, ' ')} value={model} />
+          )) : (
+            <div className="px-4 py-4">
+              <SkeletonBlock className="h-4 w-full mb-2" />
+              <SkeletonBlock className="h-4 w-2/3" />
+            </div>
+          )}
+        </ListGroup>
+
+        {policy && (
+          <ListGroup title="Token Defaults">
+            <ListItem label="Daily Tokens" value={`${policy.tokenPolicy.defaultDailyTokens}`} />
+            <ListItem label="Per-Minute Rate" value={`${policy.tokenPolicy.defaultPerMinute}`} />
+            <ListItem label="Kill Switch" value={policy.tokenPolicy.killSwitchEnabled ? 'Enabled' : 'Off'} />
+          </ListGroup>
+        )}
+      </div>
+    );
+});
+
+const AdminUsersView = memo(({
+  users,
+  isLoading,
+  isSaving,
+  hasMore,
+  onLoadMore,
+  selectedUser,
+  selectedUserPolicy,
+  selectedUserAppStats,
+  onSelectUser,
+  onPolicyChange,
+  onSavePolicy,
+  formatBytes
+}: any) => (
+  <div className="animate-slide-up space-y-6 pb-20 pt-6">
+    <div className="mx-4 rounded-[20px] bg-white/70 dark:bg-white/5 backdrop-blur-xl border border-white/40 dark:border-white/10 p-5">
+      <div className="text-xs uppercase tracking-widest text-gray-400">Selected User</div>
+      {selectedUser ? (
+        <div className="mt-3 space-y-3">
+          <div className="text-sm text-gray-500">UID</div>
+          <div className="text-sm font-semibold text-black dark:text-white break-all">{selectedUser.uid}</div>
+          {selectedUserPolicy && (
+            <div className="grid grid-cols-3 gap-3">
+              <div>
+                <div className="text-[11px] uppercase text-gray-400">Daily</div>
+                <input
+                  className="mt-1 w-full rounded-lg bg-white/60 dark:bg-black/40 border border-white/40 dark:border-white/10 px-2 py-1 text-sm"
+                  type="number"
+                  value={selectedUserPolicy.dailyTokens}
+                  onChange={(e) => onPolicyChange({ ...selectedUserPolicy, dailyTokens: Number(e.target.value) })}
+                />
+              </div>
+              <div>
+                <div className="text-[11px] uppercase text-gray-400">Per Minute</div>
+                <input
+                  className="mt-1 w-full rounded-lg bg-white/60 dark:bg-black/40 border border-white/40 dark:border-white/10 px-2 py-1 text-sm"
+                  type="number"
+                  value={selectedUserPolicy.perMinute}
+                  onChange={(e) => onPolicyChange({ ...selectedUserPolicy, perMinute: Number(e.target.value) })}
+                />
+              </div>
+              <div>
+                <div className="text-[11px] uppercase text-gray-400">Tier</div>
+                <input
+                  className="mt-1 w-full rounded-lg bg-white/60 dark:bg-black/40 border border-white/40 dark:border-white/10 px-2 py-1 text-sm"
+                  type="text"
+                  value={selectedUserPolicy.tier}
+                  onChange={(e) => onPolicyChange({ ...selectedUserPolicy, tier: e.target.value })}
+                />
+              </div>
+            </div>
+          )}
+          <button
+            onClick={onSavePolicy}
+            disabled={isSaving}
+            className="w-full py-2 rounded-xl bg-blue-500 text-white text-sm font-semibold shadow-lg shadow-blue-500/30 disabled:opacity-60"
+          >
+            {isSaving ? 'Saving...' : 'Save User Policy'}
+          </button>
+        </div>
+      ) : (
+        <div className="mt-4 text-sm text-gray-500">Select a user to edit quotas and view app usage.</div>
+      )}
+    </div>
+
+    <ListGroup title="Users">
+      {users.length === 0 && !isLoading && (
+        <div className="px-4 py-6 text-sm text-gray-500">No users found.</div>
+      )}
+      {users.map((user) => (
+        <ListItem
+          key={user.uid}
+          icon={UserIcon}
+          color="bg-blue-500"
+          label={user.uid}
+          subtitle={`Storage: ${formatBytes(user.totalSizeBytes)} • Telemetry: ${user.telemetryCount}`}
+          onClick={() => onSelectUser(user)}
+          isLink
+        />
+      ))}
+      {isLoading && (
+        <div className="px-4 py-4">
+          <SkeletonBlock className="h-4 w-full mb-2" />
+          <SkeletonBlock className="h-4 w-2/3" />
+        </div>
+      )}
+    </ListGroup>
+
+    {selectedUser && (
+      <ListGroup title="User Storage by App">
+        {Object.entries(selectedUserAppStats).slice(0, 6).map(([appId, stat]: any) => (
+          <ListItem key={appId} label={appId.replace(/_/g, ' ')} value={formatBytes(stat.sizeBytes)} />
+        ))}
+      </ListGroup>
+    )}
+
+    {hasMore && (
+      <div className="px-4">
+        <button onClick={onLoadMore} className="w-full py-2 rounded-xl bg-white/70 dark:bg-white/5 border border-white/40 dark:border-white/10 text-sm font-semibold">
+          Load More
+        </button>
+      </div>
+    )}
+  </div>
+));
+
+const AdminAppsView = memo(({ appStats, telemetryApps, policy, formatBytes }: any) => {
+  const maxTelemetry = Math.max(1, ...Object.values(telemetryApps || {}).map((stat: any) => stat.eventCount || 0));
+  return (
+    <div className="animate-slide-up space-y-6 pb-20 pt-6">
+      <ListGroup title="Apps Overview">
+        {Object.entries(appStats || {}).map(([appId, stat]: any) => {
+          const lastActive = stat.lastActiveAt ? new Date(stat.lastActiveAt).toLocaleDateString() : '—';
+          return (
+          <ListItem
+            key={appId}
+            label={appId.replace(/_/g, ' ')}
+            subtitle={`Records: ${stat.count || 0} • Last active: ${lastActive}`}
+            value={formatBytes(stat.sizeBytes || 0)}
+          />
+        );
+        })}
+      </ListGroup>
+
+      <ListGroup title="Telemetry Activity">
+        {Object.entries(telemetryApps || {}).map(([appId, stat]: any) => (
+          <div key={appId} className="px-4 py-3">
+            <div className="flex items-center justify-between text-xs text-gray-500">
+              <span>{appId.replace(/_/g, ' ')}</span>
+              <span>{stat.eventCount || 0} events</span>
+            </div>
+            <div className="mt-2 h-2 rounded-full bg-white/40 dark:bg-white/10 overflow-hidden">
+              <div className="h-full bg-blue-500 rounded-full" style={{ width: `${(stat.eventCount || 0) / maxTelemetry * 100}%` }} />
+            </div>
+          </div>
+        ))}
+      </ListGroup>
+
+      <ListGroup title="Model Mapping">
+        {policy ? Object.entries(policy.modelMapping).map(([appId, model]) => (
+          <ListItem key={appId} label={appId.replace(/_/g, ' ')} value={model} />
+        )) : (
+          <div className="px-4 py-4">
+            <SkeletonBlock className="h-4 w-full mb-2" />
+            <SkeletonBlock className="h-4 w-2/3" />
+          </div>
+        )}
+      </ListGroup>
+    </div>
+  );
+});
+
+const AdminTokensView = memo(({ policy, telemetryDaily, onPolicyChange, onSavePolicy, isSaving }: any) => {
+  if (!policy) {
+    return (
+      <div className="px-6 pt-6">
+        <SkeletonBlock className="h-6 w-2/3 mb-4" />
+        <SkeletonBlock className="h-20 w-full" />
+      </div>
+    );
+  }
+  const estimatedBurn = Math.round((telemetryDaily?.eventCount || 0) * 120);
+  return (
+    <div className="animate-slide-up space-y-6 pb-20 pt-6">
+      <ListGroup title="Global Defaults">
+        <ListItem
+          label="Daily Tokens"
+          control={
+            <input
+              className="w-20 rounded-lg bg-white/60 dark:bg-black/40 border border-white/40 dark:border-white/10 px-2 py-1 text-sm"
+              type="number"
+              value={policy.tokenPolicy.defaultDailyTokens}
+              onChange={(e) => onPolicyChange({
+                ...policy,
+                tokenPolicy: { ...policy.tokenPolicy, defaultDailyTokens: Number(e.target.value) }
+              })}
+            />
+          }
+        />
+        <ListItem
+          label="Per-Minute Rate"
+          control={
+            <input
+              className="w-20 rounded-lg bg-white/60 dark:bg-black/40 border border-white/40 dark:border-white/10 px-2 py-1 text-sm"
+              type="number"
+              value={policy.tokenPolicy.defaultPerMinute}
+              onChange={(e) => onPolicyChange({
+                ...policy,
+                tokenPolicy: { ...policy.tokenPolicy, defaultPerMinute: Number(e.target.value) }
+              })}
+            />
+          }
+        />
+        <ListItem
+          label="Kill Switch"
+          control={<Toggle value={policy.tokenPolicy.killSwitchEnabled} onChange={(v) => onPolicyChange({
+            ...policy,
+            tokenPolicy: { ...policy.tokenPolicy, killSwitchEnabled: v }
+          })} />}
+        />
+      </ListGroup>
+
+      <ListGroup title="Tier Presets">
+        {Object.entries(policy.tokenPolicy.tiers).map(([tier, preset]) => (
+          <div key={tier} className="px-4 py-3 flex items-center gap-3">
+            <div className="text-sm font-semibold capitalize w-20">{tier}</div>
+            <input
+              className="flex-1 rounded-lg bg-white/60 dark:bg-black/40 border border-white/40 dark:border-white/10 px-2 py-1 text-sm"
+              type="number"
+              value={preset.dailyTokens}
+              onChange={(e) => onPolicyChange({
+                ...policy,
+                tokenPolicy: {
+                  ...policy.tokenPolicy,
+                  tiers: { ...policy.tokenPolicy.tiers, [tier]: { ...preset, dailyTokens: Number(e.target.value) } }
+                }
+              })}
+            />
+            <input
+              className="flex-1 rounded-lg bg-white/60 dark:bg-black/40 border border-white/40 dark:border-white/10 px-2 py-1 text-sm"
+              type="number"
+              value={preset.perMinute}
+              onChange={(e) => onPolicyChange({
+                ...policy,
+                tokenPolicy: {
+                  ...policy.tokenPolicy,
+                  tiers: { ...policy.tokenPolicy.tiers, [tier]: { ...preset, perMinute: Number(e.target.value) } }
+                }
+              })}
+            />
+          </div>
+        ))}
+      </ListGroup>
+
+      <ListGroup title="Estimated Token Burn">
+        <ListItem label="Today (est.)" value={`${estimatedBurn.toLocaleString()} tokens`} />
+      </ListGroup>
+
+      <div className="px-4">
+        <button
+          onClick={onSavePolicy}
+          disabled={isSaving}
+          className="w-full py-3 rounded-xl bg-blue-500 text-white font-semibold shadow-lg shadow-blue-500/30 disabled:opacity-60"
+        >
+          {isSaving ? 'Saving...' : 'Save Policy'}
+        </button>
+      </div>
+    </div>
+  );
+});
+
+const AdminPerformanceView = memo(({ telemetryApps, telemetryDaily, appLoadTimeMs }: any) => {
+  const sortedByErrors = Object.entries(telemetryApps || {})
+    .sort(([, a]: any, [, b]: any) => (b.errorCount || 0) - (a.errorCount || 0))
+    .slice(0, 5);
+  const sortedByTti = Object.entries(telemetryApps || {})
+    .filter(([, stat]: any) => typeof stat.lastTtiMs === 'number')
+    .sort(([, a]: any, [, b]: any) => (b.lastTtiMs || 0) - (a.lastTtiMs || 0))
+    .slice(0, 5);
+
+  return (
+    <div className="animate-slide-up space-y-6 pb-20 pt-6">
+      <ListGroup title="Last 24h Summary">
+        <ListItem label="Telemetry Events" value={`${telemetryDaily?.eventCount ?? 0}`} />
+        <ListItem label="Last Ingest" value={telemetryDaily?.lastIngestAt ? new Date(telemetryDaily.lastIngestAt).toLocaleString() : '—'} />
+      </ListGroup>
+      <ListGroup title="Bundle Load">
+        <ListItem label="App Shell Load" value={appLoadTimeMs ? `${appLoadTimeMs} ms` : '—'} />
+      </ListGroup>
+      <ListGroup title="Recent Error Counts">
+        {sortedByErrors.length === 0 && <div className="px-4 py-4 text-sm text-gray-500">No error telemetry recorded.</div>}
+        {sortedByErrors.map(([appId, stat]: any) => (
+          <ListItem key={appId} label={appId.replace(/_/g, ' ')} value={`${stat.errorCount || 0} errors`} />
+        ))}
+      </ListGroup>
+
+      <ListGroup title="Slowest Screens (TTI)">
+        {sortedByTti.length === 0 && <div className="px-4 py-4 text-sm text-gray-500">No performance telemetry recorded.</div>}
+        {sortedByTti.map(([appId, stat]: any) => (
+          <ListItem key={appId} label={appId.replace(/_/g, ' ')} value={`${Math.round(stat.lastTtiMs || 0)} ms`} />
+        ))}
+      </ListGroup>
+    </div>
+  );
+});
+
 const BackendView = memo(({ recentEvents, sysMetrics, handleLobotomy }: any) => (
     <div className="animate-slide-up space-y-6 pb-20">
         <div className="px-4 py-2">
@@ -425,10 +839,11 @@ const BackendView = memo(({ recentEvents, sysMetrics, handleLobotomy }: any) => 
                 </div>
                 <div className="h-64 overflow-y-auto custom-scrollbar flex flex-col-reverse gap-1">
                     {recentEvents.map((e: any) => (
-                        <div key={`${e.timestamp}-${e.action}`} className="whitespace-nowrap flex gap-2 opacity-80 hover:opacity-100 transition-opacity">
+                        <div key={`${e.timestamp}-${e.eventType}`} className="whitespace-nowrap flex gap-2 opacity-80 hover:opacity-100 transition-opacity">
                             <span className="text-gray-500">[{new Date(e.timestamp).toLocaleTimeString().split(' ')[0]}]</span>
                             <span className="text-blue-400 font-bold">{e.appId}</span>
-                            <span className="text-white">{e.action}</span>
+                            <span className="text-white">{e.eventType}</span>
+                            <span className="text-gray-400">{e.label}</span>
                         </div>
                     ))}
                 </div>
@@ -620,11 +1035,28 @@ const SettingsApp: React.FC<SettingsAppProps> = ({
   const [isTestingAi, setIsTestingAi] = useState(false);
   const [isCoolingDown, setIsCoolingDown] = useState(false);
 
+  // Admin Data
+  const [adminPolicy, setAdminPolicy] = useState<SystemPolicy | null>(null);
+  const [adminTelemetryDaily, setAdminTelemetryDaily] = useState<{ eventCount: number; lastIngestAt: number | null } | null>(null);
+  const [adminTelemetryApps, setAdminTelemetryApps] = useState<Record<string, TelemetryAppStats>>({});
+  const [adminAppStats, setAdminAppStats] = useState<Record<string, { count: number; sizeBytes: number; lastActiveAt?: number | null }>>({});
+  const [adminSystemHealth, setAdminSystemHealth] = useState<{ lastIngestAt: number | null; lastUserId: string | null } | null>(null);
+  const [adminUsers, setAdminUsers] = useState<UserSummary[]>([]);
+  const [adminUsersCursor, setAdminUsersCursor] = useState<unknown | null>(null);
+  const [adminUsersLoading, setAdminUsersLoading] = useState(false);
+  const [adminTotalUsers, setAdminTotalUsers] = useState<number | null>(null);
+  const [selectedUser, setSelectedUser] = useState<UserSummary | null>(null);
+  const [selectedUserAppStats, setSelectedUserAppStats] = useState<Record<string, { count: number; sizeBytes: number }>>({});
+  const [selectedUserPolicy, setSelectedUserPolicy] = useState<{ dailyTokens: number; perMinute: number; tier: string } | null>(null);
+  const [isSavingPolicy, setIsSavingPolicy] = useState(false);
+  const [appLoadTimeMs, setAppLoadTimeMs] = useState<number | null>(null);
+
   // Throttling for Logs
   const logUpdateRef = useRef<number>(0);
   const testCooldownRef = useRef<number | null>(null);
 
   const currentView = viewStack[viewStack.length - 1];
+  const appIds = useMemo(() => Object.values(AppID), []);
 
   // 1. Auth Listener
   useEffect(() => {
@@ -683,6 +1115,43 @@ const SettingsApp: React.FC<SettingsAppProps> = ({
     poll(); // Initial call
 
     return () => clearInterval(interval);
+  }, [currentView, isAdmin, adminUsersLoading, adminUsers.length, appIds]);
+
+  useEffect(() => {
+    if (!isAdmin) return;
+    let active = true;
+    const loadAdminData = async () => {
+      const dateKey = new Date().toISOString().slice(0, 10);
+      if (['admin_home', 'admin_apps', 'admin_tokens', 'admin_performance'].includes(currentView)) {
+        const [policy, daily, telemetryApps, appStats, health, totalUsers] = await Promise.all([
+          getSystemPolicy(),
+          getTelemetryDaily(dateKey),
+          getTelemetryAppStats(appIds),
+          getAppStats(appIds),
+          getSystemHealth(),
+          getTotalUsersCount()
+        ]);
+        if (!active) return;
+        setAdminPolicy(policy);
+        setAdminTelemetryDaily(daily);
+        setAdminTelemetryApps(telemetryApps);
+        setAdminAppStats(appStats);
+        setAdminSystemHealth(health);
+        setAdminTotalUsers(totalUsers);
+      }
+      if (currentView === 'admin_users' && !adminUsersLoading && adminUsers.length === 0) {
+        setAdminUsersLoading(true);
+        const { items, nextCursor } = await getUserSummaries(12);
+        if (!active) return;
+        setAdminUsers(items);
+        setAdminUsersCursor(nextCursor);
+        setAdminUsersLoading(false);
+      }
+    };
+    void loadAdminData();
+    return () => {
+      active = false;
+    };
   }, [currentView, isAdmin]);
 
   // 4. Update Setting Handler
@@ -717,6 +1186,16 @@ const SettingsApp: React.FC<SettingsAppProps> = ({
         window.clearTimeout(testCooldownRef.current);
       }
     };
+  }, []);
+
+  useEffect(() => {
+    const entries = performance.getEntriesByType('navigation');
+    if (entries.length > 0) {
+      const navEntry = entries[0] as PerformanceNavigationTiming;
+      if (navEntry.loadEventEnd) {
+        setAppLoadTimeMs(Math.round(navEntry.loadEventEnd));
+      }
+    }
   }, []);
 
   const pushView = useCallback((v: View) => setViewStack(prev => [...prev, v]), []);
@@ -811,14 +1290,79 @@ const SettingsApp: React.FC<SettingsAppProps> = ({
       }
   }, [onUninstall, popView]);
 
+  const handleWallpaperChange = useCallback(async (wallpaper: any) => {
+      const isCustom = typeof wallpaper?.thumbnail === 'string' && wallpaper.thumbnail.startsWith('data:');
+      const image = isCustom ? wallpaper.thumbnail : null;
+      onWallpaperChange(wallpaper.id);
+      await storage.set(STORES.SYSTEM, 'wallpaper_id', wallpaper.id);
+      if (image) {
+        await storage.set(STORES.SYSTEM, 'wallpaper_active', { id: wallpaper.id, image });
+      } else {
+        await storage.remove(STORES.SYSTEM, 'wallpaper_active');
+      }
+      window.dispatchEvent(new CustomEvent('sys_settings_update', { detail: { wallpaperId: wallpaper.id, wallpaperImage: image } }));
+  }, [onWallpaperChange]);
+
+  const loadMoreUsers = useCallback(async () => {
+      if (adminUsersLoading || !adminUsersCursor) return;
+      setAdminUsersLoading(true);
+      const { items, nextCursor } = await getUserSummaries(12, adminUsersCursor);
+      setAdminUsers(prev => [...prev, ...items]);
+      setAdminUsersCursor(nextCursor);
+      setAdminUsersLoading(false);
+  }, [adminUsersLoading, adminUsersCursor]);
+
+  const handleSelectUser = useCallback(async (userSummary: UserSummary) => {
+      setSelectedUser(userSummary);
+      const [stats, policy] = await Promise.all([
+        getUserAppStats(userSummary.uid, appIds),
+        getUserTokenPolicy(userSummary.uid)
+      ]);
+      setSelectedUserAppStats(stats);
+      if (policy) {
+        setSelectedUserPolicy(policy);
+      } else if (adminPolicy) {
+        setSelectedUserPolicy({
+          dailyTokens: adminPolicy.tokenPolicy.defaultDailyTokens,
+          perMinute: adminPolicy.tokenPolicy.defaultPerMinute,
+          tier: 'free'
+        });
+      } else {
+        setSelectedUserPolicy({ dailyTokens: 0, perMinute: 0, tier: 'free' });
+      }
+  }, [adminPolicy, appIds]);
+
+  const handleSaveUserPolicy = useCallback(async () => {
+      if (!selectedUser || !selectedUserPolicy) return;
+      setIsSavingPolicy(true);
+      await updateUserTokenPolicy(selectedUser.uid, {
+        dailyTokens: selectedUserPolicy.dailyTokens,
+        perMinute: selectedUserPolicy.perMinute,
+        tier: selectedUserPolicy.tier
+      });
+      setIsSavingPolicy(false);
+  }, [selectedUser, selectedUserPolicy]);
+
+  const handleSaveSystemPolicy = useCallback(async () => {
+      if (!adminPolicy) return;
+      setIsSavingPolicy(true);
+      await updateSystemPolicy(adminPolicy);
+      setIsSavingPolicy(false);
+  }, [adminPolicy]);
+
   return (
-    <div className="h-full bg-[#F2F2F7] dark:bg-black font-sans flex flex-col text-black dark:text-white overflow-hidden">
+    <div className="h-full bg-gradient-to-br from-[#F7F7FB] via-white to-[#EEF1F7] dark:from-black dark:via-[#06070a] dark:to-[#0b0f1a] font-sans flex flex-col text-black dark:text-white overflow-hidden">
       {viewStack.length > 1 && (
           <Header 
             title={
                 currentView === 'profile' ? 'Apple ID' :
                 currentView === 'gemini' ? 'Intelligence' :
                 currentView === 'backend' ? 'God Mode' :
+                currentView === 'admin_home' ? 'Admin Playground' :
+                currentView === 'admin_users' ? 'Users' :
+                currentView === 'admin_apps' ? 'Apps & Storage' :
+                currentView === 'admin_tokens' ? 'Token Policy' :
+                currentView === 'admin_performance' ? 'Performance' :
                 currentView === 'app_detail' ? (selectedAppId ? ALL_APPS[selectedAppId]?.name : 'App Info') :
                 currentView.charAt(0).toUpperCase() + currentView.slice(1)
             } 
@@ -831,11 +1375,62 @@ const SettingsApp: React.FC<SettingsAppProps> = ({
         {currentView === 'main' && <MainView user={user} isAdmin={isAdmin} sysMetrics={sysMetrics} pushView={pushView} />}
         {currentView === 'profile' && <ProfileView user={user} isAdmin={isAdmin} sysMetrics={sysMetrics} handleSignOut={handleSignOut} formatBytes={formatBytes} />}
         {currentView === 'backend' && isAdmin && <BackendView recentEvents={recentEvents} sysMetrics={sysMetrics} handleLobotomy={handleLobotomy} />}
+        {currentView === 'admin_home' && isAdmin && (
+          <AdminHomeView
+            policy={adminPolicy}
+            telemetryDaily={adminTelemetryDaily}
+            appStats={adminAppStats}
+            systemHealth={adminSystemHealth}
+            totalUsers={adminTotalUsers}
+            pushView={pushView}
+            formatBytes={formatBytes}
+          />
+        )}
+        {currentView === 'admin_users' && isAdmin && (
+          <AdminUsersView
+            users={adminUsers}
+            isLoading={adminUsersLoading}
+            isSaving={isSavingPolicy}
+            hasMore={!!adminUsersCursor}
+            onLoadMore={loadMoreUsers}
+            selectedUser={selectedUser}
+            selectedUserPolicy={selectedUserPolicy}
+            selectedUserAppStats={selectedUserAppStats}
+            onSelectUser={handleSelectUser}
+            onPolicyChange={setSelectedUserPolicy}
+            onSavePolicy={handleSaveUserPolicy}
+            formatBytes={formatBytes}
+          />
+        )}
+        {currentView === 'admin_apps' && isAdmin && (
+          <AdminAppsView
+            appStats={adminAppStats}
+            telemetryApps={adminTelemetryApps}
+            policy={adminPolicy}
+            formatBytes={formatBytes}
+          />
+        )}
+        {currentView === 'admin_tokens' && isAdmin && (
+          <AdminTokensView
+            policy={adminPolicy}
+            telemetryDaily={adminTelemetryDaily}
+            onPolicyChange={setAdminPolicy}
+            onSavePolicy={handleSaveSystemPolicy}
+            isSaving={isSavingPolicy}
+          />
+        )}
+        {currentView === 'admin_performance' && isAdmin && (
+          <AdminPerformanceView
+            telemetryApps={adminTelemetryApps}
+            telemetryDaily={adminTelemetryDaily}
+            appLoadTimeMs={appLoadTimeMs}
+          />
+        )}
         {currentView === 'gemini' && <IntelligenceView sysMetrics={sysMetrics} aiLatency={aiLatency} testAiLatency={testAiLatency} settings={settings} updateSetting={updateSetting} testPrompt={testPrompt} setTestPrompt={setTestPrompt} testResponse={testResponse} isTestingAi={isTestingAi} isCoolingDown={isCoolingDown} handleTestPrompt={handleTestPrompt} />}
         {currentView === 'general' && <GeneralView pushView={pushView} />}
         {currentView === 'display' && <DisplayView settings={settings} updateSetting={updateSetting} />}
-        {currentView === 'wallpaper' && <WallpaperView settings={settings} updateSetting={updateSetting} currentWallpaperId={currentWallpaperId} onWallpaperChange={onWallpaperChange} />}
-        {currentView === 'storage' && <StorageView storeStats={storeStats} user={user} formatBytes={formatBytes} installedApps={installedApps} handleSelectApp={handleSelectApp} />}
+        {currentView === 'wallpaper' && <WallpaperView settings={settings} updateSetting={updateSetting} currentWallpaperId={currentWallpaperId} onWallpaperChange={handleWallpaperChange} />}
+        {currentView === 'storage' && <StorageView storeStats={storeStats} formatBytes={formatBytes} installedApps={installedApps} handleSelectApp={handleSelectApp} />}
         {currentView === 'app_detail' && <AppDetailView selectedAppId={selectedAppId} selectedAppSize={selectedAppSize} formatBytes={formatBytes} handleUninstall={handleUninstallApp} handleClearData={handleClearAppData} />}
         {currentView === 'power' && <PowerView settings={settings} updateSetting={updateSetting} />}
         

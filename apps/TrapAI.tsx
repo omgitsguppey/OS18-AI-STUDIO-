@@ -84,7 +84,13 @@ const TrapAI: React.FC = () => {
 
       setHistory(prev => [newBar, ...prev]);
       setCurrentBar(newBar);
-      systemCore.trackInteraction('TRAP_AI', 'generate', { vibe: selectedVibe });
+      void systemCore.trackEvent({
+        appId: AppID.TRAP_AI,
+        context: 'generation',
+        eventType: 'generate',
+        label: 'generate_bar',
+        meta: { vibe: selectedVibe }
+      });
     } finally {
       setIsGenerating(false);
     }
@@ -98,7 +104,13 @@ const TrapAI: React.FC = () => {
     setHistory(prev => prev.map(h => h.id === currentBar.id ? updated : h));
     
     if (newRating) {
-      systemCore.trackInteraction('TRAP_AI', newRating === 'up' ? 'success' : 'dislike', { content: currentBar.text });
+      void systemCore.trackEvent({
+        appId: AppID.TRAP_AI,
+        context: 'feedback',
+        eventType: newRating === 'up' ? 'success' : 'click',
+        label: newRating === 'up' ? 'rate_up' : 'rate_down',
+        meta: { barLength: currentBar.text.length }
+      });
     }
   };
 

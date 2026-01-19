@@ -19,7 +19,13 @@ export const useSystemIntelligence = (appId: string, contentId?: string, content
             if (startTimeRef.current && !hasTrackedDwell.current) {
               const duration = (Date.now() - startTimeRef.current) / 1000;
               if (duration > 2) { // Minimum 2s to count as dwell
-                systemCore.trackInteraction(appId, 'dwell', { contentId, duration });
+                void systemCore.trackEvent({
+                  appId,
+                  context: 'content',
+                  eventType: 'dwell',
+                  label: 'content_dwell',
+                  meta: { contentId, durationSeconds: duration }
+                });
                 hasTrackedDwell.current = true; // Only track once per mount/content
               }
               startTimeRef.current = null;
@@ -38,7 +44,13 @@ export const useSystemIntelligence = (appId: string, contentId?: string, content
       if (startTimeRef.current && !hasTrackedDwell.current) {
          const duration = (Date.now() - startTimeRef.current) / 1000;
          if (duration > 2) {
-            systemCore.trackInteraction(appId, 'dwell', { contentId, duration });
+            void systemCore.trackEvent({
+              appId,
+              context: 'content',
+              eventType: 'dwell',
+              label: 'content_dwell',
+              meta: { contentId, durationSeconds: duration }
+            });
          }
       }
     };
@@ -54,34 +66,67 @@ export const useSystemIntelligence = (appId: string, contentId?: string, content
 
   const trackCopy = useCallback((text: string) => {
     // Fire and forget
-    systemCore.trackInteraction(appId, 'copy', { textLength: text.length });
+    void systemCore.trackEvent({
+      appId,
+      context: 'content',
+      eventType: 'copy',
+      label: 'copy',
+      meta: { textLength: text.length }
+    });
     navigator.clipboard.writeText(text);
   }, [appId]);
 
   const trackDownload = useCallback(() => {
-    systemCore.trackInteraction(appId, 'download', { contentId });
+    void systemCore.trackEvent({
+      appId,
+      context: 'content',
+      eventType: 'download',
+      label: 'download',
+      meta: { contentId }
+    });
   }, [appId, contentId]);
 
   const trackEdit = useCallback((original: string, final: string) => {
     if (original !== final) {
-        systemCore.trackInteraction(appId, 'edit', { 
-            originalLength: original.length, 
-            finalLength: final.length 
-        });
+      void systemCore.trackEvent({
+        appId,
+        context: 'content',
+        eventType: 'input',
+        label: 'edit',
+        meta: {
+          originalLength: original.length,
+          finalLength: final.length
+        }
+      });
     }
   }, [appId]);
 
   const trackGenerate = useCallback(() => {
-      systemCore.trackInteraction(appId, 'generate');
+    void systemCore.trackEvent({
+      appId,
+      context: 'action',
+      eventType: 'generate',
+      label: 'generate'
+    });
   }, [appId]);
 
   const trackError = useCallback((errorMsg: string) => {
-      systemCore.trackInteraction(appId, 'error', { message: errorMsg });
+    void systemCore.trackEvent({
+      appId,
+      context: 'error',
+      eventType: 'error',
+      label: 'error',
+      meta: { messageLength: errorMsg.length }
+    });
   }, [appId]);
 
   const trackAction = useCallback((actionName: string) => {
-      // Generic tracker for clicks/toggles, mapped to 'sys_event' or 'open' based on context
-      systemCore.trackInteraction(appId, 'open', { label: actionName });
+    void systemCore.trackEvent({
+      appId,
+      context: 'action',
+      eventType: 'click',
+      label: actionName
+    });
   }, [appId]);
 
   return {

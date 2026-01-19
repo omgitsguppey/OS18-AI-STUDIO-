@@ -19,13 +19,36 @@ export interface Insight {
   timestamp: number;
 }
 
-export interface InteractionEvent {
+export type TelemetryEventType =
+  | "open"
+  | "close"
+  | "navigation"
+  | "click"
+  | "input"
+  | "error"
+  | "performance"
+  | "save"
+  | "delete"
+  | "generate"
+  | "regenerate"
+  | "download"
+  | "copy"
+  | "dwell"
+  | "install"
+  | "import"
+  | "export"
+  | "submit"
+  | "success";
+
+export interface TelemetryEvent {
+  uid?: string;
+  sessionId: string;
   appId: string;
-  action: "open" | "generate" | "regenerate" | "edit" | "copy" |
-          "download" | "dwell" | "abandon" | "success" | "dislike" |
-          "completion" | "error" | "sys_event" | "install_app" | "open_app";
+  context: string;
+  eventType: TelemetryEventType;
+  label: string;
   timestamp: number;
-  metadata?: unknown;
+  meta?: Record<string, unknown> | null;
   score?: number;
 }
 
@@ -238,10 +261,10 @@ export class DreamingEngine {
   /**
    * Processes a batch of raw events for a specific user.
    * @param {string} userId - The user's ID.
-   * @param {InteractionEvent[]} events - List of raw events.
+   * @param {TelemetryEvent[]} events - List of raw events.
    * @return {Promise<{processed: number}>} - Result summary.
    */
-  async processEvents(userId: string, events: InteractionEvent[]) {
+  async processEvents(userId: string, events: TelemetryEvent[]) {
     const userRef = this.db.collection("users").doc(userId);
     const systemMemRef = userRef.collection("system").doc("core_memory");
 
@@ -264,7 +287,7 @@ export class DreamingEngine {
 
       state.sessionScore += batchScore;
       state.requestCount += events.filter(
-        (e) => e.action === "completion"
+        (e) => e.eventType === "generate" || e.eventType === "regenerate"
       ).length;
 
       this.analyzePatterns(scoredEvents, state);
@@ -279,50 +302,49 @@ export class DreamingEngine {
 
   /**
    * Calculates the HVA score for a single event.
-   * @param {InteractionEvent} event - The event to score.
+   * @param {TelemetryEvent} event - The event to score.
    * @return {number} - The calculated score.
    */
-  private calculateScore(event: InteractionEvent): number {
+  private calculateScore(event: TelemetryEvent): number {
     let score = 0;
-    const {action} = event;
-    const metadata = isPlainObject(event.metadata) ? event.metadata : null;
+    const {eventType, label} = event;
+    const metadata = isPlainObject(event.meta) ? event.meta : null;
 
-    if (action === "regenerate") {
+    if (eventType === "regenerate") {
       score = SCORES.REGENERATE_SLOW;
     }
-    if (action === "dwell") {
-      const duration = metadata && typeof metadata.duration === "number" ?
-        metadata.duration : 0;
+    if (eventType === "dwell") {
+      const duration = metadata && typeof metadata.durationSeconds === "number" ?
+        metadata.durationSeconds : 0;
       score = duration > 5 ?
         SCORES.DWELL_LONG : SCORES.DWELL_SHORT;
     }
-    if (action === "edit" && metadata) {
-      const original = metadata.original;
-      const final = metadata.final;
-      if (typeof original === "string" && typeof final === "string") {
-        if (Math.abs(original.length - final.length) < 20) {
+    if (eventType === "input" && metadata) {
+      const originalLength = metadata.originalLength;
+      const finalLength = metadata.finalLength;
+      if (typeof originalLength === "number" && typeof finalLength === "number") {
+        if (Math.abs(originalLength - finalLength) < 20) {
           score = SCORES.EDIT;
         }
       }
     }
 
-    if (action === "copy") score = SCORES.COPY;
-    if (action === "download") score = SCORES.DOWNLOAD;
-    if (action === "success") score = SCORES.SUCCESS;
-    if (action === "dislike") score = SCORES.DISLIKE;
-    if (action === "install_app") score = SCORES.INSTALL;
-    if (action === "completion") score = SCORES.COMPLETION;
-    if (action === "error") score = SCORES.ERROR;
+    if (eventType === "copy") score = SCORES.COPY;
+    if (eventType === "download") score = SCORES.DOWNLOAD;
+    if (eventType === "success") score = SCORES.SUCCESS;
+    if (eventType === "install") score = SCORES.INSTALL;
+    if (eventType === "performance" && label === "completion") score = SCORES.COMPLETION;
+    if (eventType === "error") score = SCORES.ERROR;
 
     return score;
   }
 
   /**
    * Analyzes event streams for velocity and context switching.
-   * @param {InteractionEvent[]} events - Recent events.
+   * @param {TelemetryEvent[]} events - Recent events.
    * @param {SystemState} state - Current system state to update.
    */
-  private analyzePatterns(events: InteractionEvent[], state: SystemState) {
+  private analyzePatterns(events: TelemetryEvent[], state: SystemState) {
     if (events.length < 5) return;
 
     const startTime = events[0].timestamp;
@@ -347,7 +369,7 @@ export class DreamingEngine {
         "Rapid context switching observed.", "pattern", 0.9);
     }
 
-    const errors = events.filter((e) => e.action === "error").length;
+    const errors = events.filter((e) => e.eventType === "error").length;
     if (errors > 2) {
       this.addInsight(state,
         "Multiple errors detected.", "anomaly", 0.95);
@@ -356,10 +378,10 @@ export class DreamingEngine {
 
   /**
    * Consolidates raw events into long-term memories (Facts).
-   * @param {InteractionEvent[]} events - Events to analyze.
+   * @param {TelemetryEvent[]} events - Events to analyze.
    * @param {SystemState} state - State to update.
    */
-  private consolidateMemories(events: InteractionEvent[], state: SystemState) {
+  private consolidateMemories(events: TelemetryEvent[], state: SystemState) {
     const appCounts: Record<string, number> = {};
     events.forEach((e) => {
       if (e.appId !== "SYSTEM") {
@@ -381,13 +403,13 @@ export class DreamingEngine {
 
   /**
    * Aggregates usage metrics from validated completion events.
-   * @param {InteractionEvent[]} events - Events to analyze.
+   * @param {TelemetryEvent[]} events - Events to analyze.
    * @param {SystemState} state - State to update.
    */
-  private updateAggregateMetrics(events: InteractionEvent[], state: SystemState) {
+  private updateAggregateMetrics(events: TelemetryEvent[], state: SystemState) {
     for (const event of events) {
-      if (event.action !== "completion") continue;
-      const metadata = isPlainObject(event.metadata) ? event.metadata : null;
+      if (event.eventType !== "performance" || event.label !== "completion") continue;
+      const metadata = isPlainObject(event.meta) ? event.meta : null;
       if (!metadata) continue;
 
       const inputLength = metadata.inputLength;
