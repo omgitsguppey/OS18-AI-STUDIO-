@@ -9,6 +9,14 @@ import { storage, STORES } from './services/storageService';
 import { authService } from './services/authService';
 import { syncService } from './services/syncService';
 import { User } from 'firebase/auth';
+import {
+  normalizeSettings,
+  normalizeSettingsUpdate,
+  normalizeWallpaperSelection,
+  normalizeWallpaperUpdate
+} from './utils/systemSettings';
+
+const FALLBACK_WALLPAPER_ID = WALLPAPERS[0]?.id ?? 'ios18';
 
 // --- LAZY LOADED APPS ---
 const Calculator = React.lazy(() => import('./apps/Calculator'));
@@ -78,7 +86,8 @@ const App: React.FC = () => {
   const [activeApp, setActiveApp] = useState<AppID | null>(null);
   const [zIndices, setZIndices] = useState<Record<AppID, number>>({} as any);
   const [isEditMode, setIsEditMode] = useState(false);
-  const [wallpaperId, setWallpaperId] = useState('ios18');
+  const [wallpaperId, setWallpaperId] = useState(FALLBACK_WALLPAPER_ID);
+  const [customWallpaperImage, setCustomWallpaperImage] = useState<string | null>(null);
   const [currentPage, setCurrentPage] = useState(0);
   
   // Search State
@@ -174,44 +183,50 @@ const App: React.FC = () => {
     window.addEventListener('keydown', handleGlobalKey);
     
     // Initial Settings Load
-    const loadSettings = async () => {
-        const savedSettings = await storage.get<any>(STORES.SYSTEM, 'user_settings');
-        const savedWp = await storage.get<string>(STORES.SYSTEM, 'wallpaper_id');
-        
-        if (savedSettings) {
-            setDimLevel(savedSettings.dimLevel || 0);
-            setReducedMotion(savedSettings.reducedMotion || false);
-            setNightShift(savedSettings.nightShift || false);
-            setShowFPS(savedSettings.showFPS || false);
-            setWallpaperDimming(savedSettings.wallpaperDimming || false);
-            
-            document.documentElement.style.setProperty('--text-scale', savedSettings.textSize?.toString() || '1');
-            if (savedSettings.boldText) document.body.classList.add('font-bold');
-            else document.body.classList.remove('font-bold');
-            
-            if (savedSettings.debugBorders) document.body.classList.add('debug-borders');
+    const applySettingsUpdate = (update: ReturnType<typeof normalizeSettingsUpdate>) => {
+        if (update.dimLevel !== undefined) setDimLevel(update.dimLevel);
+        if (update.reducedMotion !== undefined) setReducedMotion(update.reducedMotion);
+        if (update.nightShift !== undefined) setNightShift(update.nightShift);
+        if (update.showFPS !== undefined) setShowFPS(update.showFPS);
+        if (update.wallpaperDimming !== undefined) setWallpaperDimming(update.wallpaperDimming);
+        if (update.textSize !== undefined) document.documentElement.style.setProperty('--text-scale', update.textSize.toString());
+        if (update.boldText !== undefined) {
+             if (update.boldText) document.body.classList.add('font-bold');
+             else document.body.classList.remove('font-bold');
+        }
+        if (update.debugBorders !== undefined) {
+            if (update.debugBorders) document.body.classList.add('debug-borders');
             else document.body.classList.remove('debug-borders');
         }
-        if (savedWp) setWallpaperId(savedWp);
+    };
+
+    const loadSettings = async () => {
+        const savedSettings = await storage.get<unknown>(STORES.SYSTEM, 'user_settings');
+        const savedWp = await storage.get<unknown>(STORES.SYSTEM, 'wallpaper_id');
+        const savedWallpaper = await storage.get<unknown>(STORES.SYSTEM, 'wallpaper_active');
+
+        const normalizedSettings = normalizeSettings(savedSettings);
+        applySettingsUpdate(normalizedSettings);
+
+        const wallpaperSelection = normalizeWallpaperSelection({
+            storedId: savedWp,
+            storedCustom: savedWallpaper,
+            wallpapers: WALLPAPERS,
+            fallbackId: FALLBACK_WALLPAPER_ID
+        });
+        setWallpaperId(wallpaperSelection.wallpaperId);
+        setCustomWallpaperImage(wallpaperSelection.customImage);
     };
     loadSettings();
 
     const handleSettingsUpdate = (e: Event) => {
-        const s = (e as CustomEvent).detail;
-        if (s.dimLevel !== undefined) setDimLevel(s.dimLevel);
-        if (s.reducedMotion !== undefined) setReducedMotion(s.reducedMotion);
-        if (s.nightShift !== undefined) setNightShift(s.nightShift);
-        if (s.showFPS !== undefined) setShowFPS(s.showFPS);
-        if (s.wallpaperDimming !== undefined) setWallpaperDimming(s.wallpaperDimming);
-        if (s.textSize !== undefined) document.documentElement.style.setProperty('--text-scale', s.textSize.toString());
-        if (s.boldText !== undefined) {
-             if (s.boldText) document.body.classList.add('font-bold');
-             else document.body.classList.remove('font-bold');
-        }
-        if (s.debugBorders !== undefined) {
-            if (s.debugBorders) document.body.classList.add('debug-borders');
-            else document.body.classList.remove('debug-borders');
-        }
+        const detail = (e as CustomEvent).detail;
+        const update = normalizeSettingsUpdate(detail);
+        applySettingsUpdate(update);
+
+        const wallpaperUpdate = normalizeWallpaperUpdate(detail, WALLPAPERS, FALLBACK_WALLPAPER_ID);
+        if (wallpaperUpdate.wallpaperId !== undefined) setWallpaperId(wallpaperUpdate.wallpaperId);
+        if (wallpaperUpdate.wallpaperImage !== undefined) setCustomWallpaperImage(wallpaperUpdate.wallpaperImage);
     };
     window.addEventListener('sys_settings_update', handleSettingsUpdate);
     window.addEventListener('system_settings_change', handleSettingsUpdate);
@@ -267,31 +282,34 @@ const App: React.FC = () => {
   };
 
   const handleInstall = (id: AppID) => {
-    if (!installedApps.includes(id)) setInstalledApps([...installedApps, id]);
+    setInstalledApps(prev => (prev.includes(id) ? prev : [...prev, id]));
   };
 
   const handleUninstall = (id: AppID) => {
     if (ALL_APPS[id].isSystem) return;
     setInstalledApps(prev => prev.filter(appId => appId !== id));
-    if (openApps.includes(id)) closeApp(id);
+    setOpenApps(prev => prev.filter(appId => appId !== id));
+    if (activeApp === id) setActiveApp(null);
   };
 
   const launchApp = (id: AppID) => {
     if (isEditMode) return;
-    if (!openApps.includes(id)) setOpenApps([...openApps, id]);
+    setOpenApps(prev => (prev.includes(id) ? prev : [...prev, id]));
     bringToFront(id);
   };
 
   const closeApp = (id: AppID) => {
-    setOpenApps(openApps.filter(appId => appId !== id));
+    setOpenApps(prev => prev.filter(appId => appId !== id));
     if (activeApp === id) setActiveApp(null);
   };
 
   const bringToFront = (id: AppID) => {
     setActiveApp(id);
-    const values = Object.values(zIndices) as number[];
-    const maxZ = values.length > 0 ? Math.max(0, ...values) : 0;
-    setZIndices(prev => ({ ...prev, [id]: maxZ + 1 }));
+    setZIndices(prev => {
+        const values = Object.values(prev) as number[];
+        const maxZ = values.length > 0 ? Math.max(0, ...values) : 0;
+        return { ...prev, [id]: maxZ + 1 };
+    });
   };
 
   const navigateToApp = (fromId: AppID, toId: AppID) => {
@@ -316,9 +334,7 @@ const App: React.FC = () => {
         {(() => {
             switch (id) {
             case AppID.CALCULATOR: return <Calculator />;
-            case AppID.STORE: return <AppStore installedApps={installedApps} onInstall={handleInstall} onLaunch={function (id: AppID): void {
-                throw new Error('Function not implemented.');
-              } } />;
+            case AppID.STORE: return <AppStore installedApps={installedApps} onInstall={handleInstall} onLaunch={launchApp} />;
             case AppID.TIPS: return <TipsApp />;
             
             // --- UPDATED SETTINGS CALL ---
@@ -374,7 +390,13 @@ const App: React.FC = () => {
     return p;
   }, [installedApps, layout.maxApps]);
 
-  const currentWallpaper = WALLPAPERS.find(w => w.id === wallpaperId) || WALLPAPERS[0];
+  const builtInWallpaper = WALLPAPERS.find(w => w.id === wallpaperId);
+  const currentWallpaper = builtInWallpaper || (customWallpaperImage ? {
+    id: wallpaperId,
+    name: 'Custom',
+    thumbnail: customWallpaperImage,
+    style: { backgroundImage: `url(${customWallpaperImage})` }
+  } : WALLPAPERS[0]);
   const filteredApps = (Object.values(ALL_APPS) as AppConfig[]).filter(app => installedApps.includes(app.id) && (app.name.toLowerCase().includes(searchQuery.toLowerCase()) || app.description.toLowerCase().includes(searchQuery.toLowerCase()))).sort((a, b) => a.name.localeCompare(b.name));
 
   // --- LOGIN SCREEN RENDER ---
