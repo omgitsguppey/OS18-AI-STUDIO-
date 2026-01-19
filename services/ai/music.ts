@@ -1,6 +1,6 @@
 
 import { Type } from "@google/genai";
-import { getAIClient, APP_MODEL_CONFIG } from "./core";
+import { getAIClient, APP_MODEL_CONFIG, normalizeAiJson } from "./core";
 import { AppID } from "../../types";
 import { LocalIntelligence } from "../localIntelligence";
 
@@ -37,36 +37,41 @@ export const generatePlaylistMetadata = async (
   const generatedColors = LocalIntelligence.generatePalette(aesthetic || moods[0] || "Music");
   const primaryColor = generatedColors[0].hex;
 
+  const responseSchema = {
+    type: Type.OBJECT,
+    properties: {
+      title: { type: Type.STRING },
+      description: { type: Type.STRING },
+      tracks: {
+        type: Type.ARRAY,
+        items: {
+          type: Type.OBJECT,
+          properties: {
+            title: { type: Type.STRING },
+            artist: { type: Type.STRING },
+            duration: { type: Type.STRING },
+            explicit: { type: Type.BOOLEAN }
+          },
+          required: ['title', 'artist', 'duration', 'explicit']
+        }
+      }
+    },
+    required: ['title', 'description', 'tracks']
+  };
+
   const response = await ai.models.generateContent({
     model: APP_MODEL_CONFIG[AppID.PLAYLIST_AI],
     contents: prompt,
     config: {
       responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          title: { type: Type.STRING },
-          description: { type: Type.STRING },
-          tracks: {
-            type: Type.ARRAY,
-            items: {
-              type: Type.OBJECT,
-              properties: {
-                title: { type: Type.STRING },
-                artist: { type: Type.STRING },
-                duration: { type: Type.STRING },
-                explicit: { type: Type.BOOLEAN }
-              },
-              required: ['title', 'artist', 'duration', 'explicit']
-            }
-          }
-        },
-        required: ['title', 'description', 'tracks']
-      }
+      responseSchema
     }
   });
 
-  const data = JSON.parse(response.text || '{}');
+  const data = await normalizeAiJson<Omit<GeneratedPlaylist, 'id' | 'createdAt' | 'coverImageBase64'>>(
+    response.text || '',
+    responseSchema
+  );
   
   return {
       ...data,

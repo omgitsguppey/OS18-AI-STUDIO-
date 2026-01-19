@@ -159,10 +159,30 @@ class StorageService {
   async getStoreStats(storeName: string): Promise<StoreStats> {
     if (!auth.currentUser) return { name: storeName, count: 0, sizeBytes: 0 };
     
-    // Aggregation queries avoid full collection scans for counts and reduce read costs.
-    const col = this.getCollectionRef(storeName);
-    const countSnap = await getCountFromServer(col);
-    const count = countSnap.data().count;
+    const userId = auth.currentUser.uid;
+    const counterCol = collection(
+      db,
+      "store_counters",
+      userId,
+      "stores",
+      storeName,
+      "shards"
+    );
+    const counterSnap = await getDocs(counterCol);
+    let count = 0;
+
+    if (counterSnap.empty) {
+      // Aggregation queries avoid full collection scans for counts and reduce read costs.
+      const col = this.getCollectionRef(storeName);
+      const countSnap = await getCountFromServer(col);
+      count = countSnap.data().count;
+    } else {
+      count = counterSnap.docs.reduce((total, docSnap) => {
+        const data = docSnap.data();
+        const shardCount = typeof data.count === "number" ? data.count : 0;
+        return total + shardCount;
+      }, 0);
+    }
 
     return {
         name: storeName,

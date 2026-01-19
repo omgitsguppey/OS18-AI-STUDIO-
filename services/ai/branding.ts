@@ -1,6 +1,6 @@
 
 import { Type } from "@google/genai";
-import { getAIClient, APP_MODEL_CONFIG } from "./core";
+import { getAIClient, APP_MODEL_CONFIG, normalizeAiJson } from "./core";
 import { AppID } from "../../types";
 import { LocalIntelligence } from "../localIntelligence";
 
@@ -39,22 +39,24 @@ export const generateBrandQuestions = async (brandName: string): Promise<string[
   Generate exactly 5 short, strategic questions to help define the brand's personality, audience, and goals.
   Return JSON object with a "questions" array of strings.`;
 
+  const responseSchema = {
+    type: Type.OBJECT,
+    properties: {
+      questions: { type: Type.ARRAY, items: { type: Type.STRING } }
+    },
+    required: ['questions']
+  };
+
   const response = await ai.models.generateContent({
     model: APP_MODEL_CONFIG[AppID.BRAND_KIT_AI],
     contents: prompt,
     config: {
       responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          questions: { type: Type.ARRAY, items: { type: Type.STRING } }
-        },
-        required: ['questions']
-      }
+      responseSchema
     }
   });
 
-  const data = JSON.parse(response.text || '{"questions": []}');
+  const data = await normalizeAiJson<{ questions: string[] }>(response.text || '', responseSchema);
   return data.questions || [];
 };
 
@@ -76,54 +78,59 @@ export const generateBrandKit = async (brandName: string, qaPairs: {q: string, a
   Do NOT generate colors (handled by system).
   `;
 
+  const responseSchema = {
+    type: Type.OBJECT,
+    properties: {
+      brandName: { type: Type.STRING },
+      slogan: { type: Type.STRING },
+      valueProposition: { type: Type.STRING },
+      missionStatement: { type: Type.STRING },
+      targetAudience: { type: Type.STRING },
+      typography: {
+        type: Type.OBJECT,
+        properties: {
+          headingFont: { type: Type.STRING },
+          bodyFont: { type: Type.STRING }
+        },
+        required: ['headingFont', 'bodyFont']
+      },
+      metrics: {
+        type: Type.ARRAY,
+        items: {
+          type: Type.OBJECT,
+          properties: {
+            label: { type: Type.STRING },
+            target: { type: Type.STRING }
+          },
+          required: ['label', 'target']
+        }
+      },
+      pressKit: {
+        type: Type.OBJECT,
+        properties: {
+          shortBio: { type: Type.STRING },
+          boilerplate: { type: Type.STRING }
+        },
+        required: ['shortBio', 'boilerplate']
+      }
+    },
+    required: ['brandName', 'slogan', 'valueProposition', 'missionStatement', 'targetAudience', 'typography', 'metrics', 'pressKit']
+  };
+
   const response = await ai.models.generateContent({
     model: APP_MODEL_CONFIG[AppID.BRAND_KIT_AI],
     contents: `Brand Name: "${brandName}". Generate Kit.`,
     config: {
       systemInstruction,
       responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          brandName: { type: Type.STRING },
-          slogan: { type: Type.STRING },
-          valueProposition: { type: Type.STRING },
-          missionStatement: { type: Type.STRING },
-          targetAudience: { type: Type.STRING },
-          typography: {
-            type: Type.OBJECT,
-            properties: {
-              headingFont: { type: Type.STRING },
-              bodyFont: { type: Type.STRING }
-            },
-            required: ['headingFont', 'bodyFont']
-          },
-          metrics: {
-            type: Type.ARRAY,
-            items: {
-              type: Type.OBJECT,
-              properties: {
-                label: { type: Type.STRING },
-                target: { type: Type.STRING }
-              },
-              required: ['label', 'target']
-            }
-          },
-          pressKit: {
-            type: Type.OBJECT,
-            properties: {
-              shortBio: { type: Type.STRING },
-              boilerplate: { type: Type.STRING }
-            },
-            required: ['shortBio', 'boilerplate']
-          }
-        },
-        required: ['brandName', 'slogan', 'valueProposition', 'missionStatement', 'targetAudience', 'typography', 'metrics', 'pressKit']
-      }
+      responseSchema
     }
   });
 
-  const aiData = JSON.parse(response.text || '{}');
+  const aiData = await normalizeAiJson<Omit<BrandKit, 'id' | 'createdAt' | 'colors'>>(
+    response.text || '',
+    responseSchema
+  );
   
   return {
     ...aiData,
