@@ -164,7 +164,12 @@ const LyricsAI: React.FC = () => {
     setNewArtistName('');
     setNewArtistGenre('');
     setView('hub');
-    systemCore.trackInteraction('LYRICS_AI', 'sys_event', { label: 'create_artist' });
+    void systemCore.trackEvent({
+      appId: AppID.LYRICS_AI,
+      context: 'action',
+      eventType: 'click',
+      label: 'create_artist'
+    });
   };
 
   const handleAddSong = async () => {
@@ -191,7 +196,13 @@ const LyricsAI: React.FC = () => {
           : a
       ));
       
-      systemCore.trackInteraction('LYRICS_AI', 'generate', { type: 'song_analysis' });
+      void systemCore.trackEvent({
+        appId: AppID.LYRICS_AI,
+        context: 'generation',
+        eventType: 'generate',
+        label: 'song_analysis',
+        meta: { inputLength: lyrics.length }
+      });
 
       setNewSongTitle('');
       setNewSongLyrics('');
@@ -226,7 +237,13 @@ const LyricsAI: React.FC = () => {
             a.id === selectedArtistId ? { ...a, profileAnalysis: profile } : a
         ));
         
-        systemCore.trackInteraction('LYRICS_AI', 'generate', { type: 'artist_profile' });
+        void systemCore.trackEvent({
+          appId: AppID.LYRICS_AI,
+          context: 'generation',
+          eventType: 'generate',
+          label: 'artist_profile',
+          meta: { inputLength: artistName.length }
+        });
     } catch (e) {
         console.error("Profile Gen Error", e);
     } finally {

@@ -84,7 +84,13 @@ const JustSellIt: React.FC = () => {
 
   const markAsGolden = (strategy: ProductStrategy) => {
       // Learn from success
-      systemCore.trackInteraction(AppID.SELL_IT, 'success', { template: strategy });
+      void systemCore.trackEvent({
+        appId: AppID.SELL_IT,
+        context: 'action',
+        eventType: 'success',
+        label: 'template_selected',
+        meta: { template: strategy }
+      });
       alert("Strategy marked as Gold. System will use this structure for future plans.");
   };
 

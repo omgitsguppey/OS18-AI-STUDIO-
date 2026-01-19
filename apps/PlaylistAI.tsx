@@ -16,6 +16,7 @@ import {
 import { generatePlaylistMetadata, generatePlaylistCover, GeneratedPlaylist } from '../services/geminiService';
 import { storage, STORES } from '../services/storageService';
 import { systemCore } from '../services/systemCore';
+import { AppID } from '../types';
 
 const MOODS = [
   "Chill", "Hype", "Melancholy", "Focus", "Party", 
@@ -122,7 +123,13 @@ const PlaylistAI: React.FC = () => {
       setCurrentPlaylist(newPlaylist);
       setView('player');
       
-      systemCore.trackInteraction('PLAYLIST_AI', 'generate', { type: 'vibe_curation' });
+      void systemCore.trackEvent({
+        appId: AppID.PLAYLIST_AI,
+        context: 'generation',
+        eventType: 'generate',
+        label: 'vibe_curation',
+        meta: { inputLength: (aesthetic || selectedMoods.join(' ')).length }
+      });
 
     } catch (e) {
       console.error(e);

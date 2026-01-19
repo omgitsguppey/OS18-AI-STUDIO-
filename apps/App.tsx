@@ -78,6 +78,7 @@ const App: React.FC = () => {
   const [zIndices, setZIndices] = useState<Record<AppID, number>>({} as any);
   const [isEditMode, setIsEditMode] = useState(false);
   const [wallpaperId, setWallpaperId] = useState('ios18');
+  const [customWallpaperImage, setCustomWallpaperImage] = useState<string | null>(null);
   const [currentPage, setCurrentPage] = useState(0);
   
   // Search State
@@ -146,23 +147,59 @@ const App: React.FC = () => {
     // Global Event Tracking
     const handleGlobalClick = (e: MouseEvent) => {
         const target = e.target as HTMLElement;
-        const label = target.innerText || target.getAttribute('aria-label') || target.tagName;
-        if (!target.closest('.font-mono')) {
-            systemCore.trackRawEvent('click', label.substring(0, 30));
-        }
+        if (target.closest('.font-mono')) return;
+        const datasetLabel = target.dataset?.telemetryLabel;
+        const ariaLabel = target.getAttribute('aria-label');
+        const tagLabel = target.tagName.toLowerCase();
+        const label = datasetLabel || ariaLabel || tagLabel;
+        systemCore.trackRawEvent('click', label);
     };
 
     const handleGlobalKey = (e: KeyboardEvent) => {
-        systemCore.trackRawEvent('keypress', 'Input Activity');
+        if (e.key !== 'Enter') return;
+        const target = e.target as HTMLElement;
+        const isInput = target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement;
+        const length = isInput && typeof target.value === 'string' ? target.value.length : undefined;
+        void systemCore.trackEvent({
+            appId: 'SYSTEM',
+            context: 'input',
+            eventType: 'input',
+            label: 'submit',
+            meta: typeof length === 'number' ? { inputLength: length } : undefined
+        });
+    };
+
+    const handleGlobalError = (event: ErrorEvent) => {
+        void systemCore.trackEvent({
+            appId: 'SYSTEM',
+            context: 'error',
+            eventType: 'error',
+            label: 'window_error',
+            meta: { messageLength: event.message ? event.message.length : 0 }
+        });
+    };
+
+    const handleUnhandledRejection = (event: PromiseRejectionEvent) => {
+        const message = event.reason instanceof Error ? event.reason.message : String(event.reason ?? '');
+        void systemCore.trackEvent({
+            appId: 'SYSTEM',
+            context: 'error',
+            eventType: 'error',
+            label: 'unhandled_rejection',
+            meta: { messageLength: message.length }
+        });
     };
 
     window.addEventListener('click', handleGlobalClick);
     window.addEventListener('keydown', handleGlobalKey);
+    window.addEventListener('error', handleGlobalError);
+    window.addEventListener('unhandledrejection', handleUnhandledRejection);
 
     // Load Settings
     const loadSettings = async () => {
         const savedSettings = await storage.get<any>(STORES.SYSTEM, 'user_settings');
         const savedWp = await storage.get<string>(STORES.SYSTEM, 'wallpaper_id');
+        const savedWallpaper = await storage.get<{ id?: string; image?: string }>(STORES.SYSTEM, 'wallpaper_active');
         
         if (savedSettings) {
             setDimLevel(savedSettings.dimLevel || 0);
@@ -179,6 +216,9 @@ const App: React.FC = () => {
             else document.body.classList.remove('debug-borders');
         }
         if (savedWp) setWallpaperId(savedWp);
+        if (savedWallpaper?.image) {
+            setCustomWallpaperImage(savedWallpaper.image);
+        }
     };
     loadSettings();
 
@@ -190,6 +230,8 @@ const App: React.FC = () => {
         if (s.nightShift !== undefined) setNightShift(s.nightShift);
         if (s.showFPS !== undefined) setShowFPS(s.showFPS);
         if (s.wallpaperDimming !== undefined) setWallpaperDimming(s.wallpaperDimming);
+        if (s.wallpaperId !== undefined) setWallpaperId(s.wallpaperId);
+        if (s.wallpaperImage !== undefined) setCustomWallpaperImage(s.wallpaperImage);
         if (s.textSize !== undefined) document.documentElement.style.setProperty('--text-scale', s.textSize.toString());
         if (s.boldText !== undefined) {
              if (s.boldText) document.body.classList.add('font-bold');
@@ -206,6 +248,8 @@ const App: React.FC = () => {
     return () => {
         window.removeEventListener('click', handleGlobalClick);
         window.removeEventListener('keydown', handleGlobalKey);
+        window.removeEventListener('error', handleGlobalError);
+        window.removeEventListener('unhandledrejection', handleUnhandledRejection);
         window.removeEventListener('sys_settings_update', handleSettingsUpdate);
         window.removeEventListener('system_settings_change', handleSettingsUpdate);
     };
@@ -234,14 +278,42 @@ const App: React.FC = () => {
   useEffect(() => {
     if (activeApp) {
         activeAppStartTimeRef.current = Date.now();
-        systemCore.trackInteraction(activeApp, 'open');
+        void systemCore.trackEvent({
+            appId: activeApp,
+            context: 'app',
+            eventType: 'open',
+            label: 'open_app'
+        });
+
+        const start = performance.now();
+        requestAnimationFrame(() => {
+            void systemCore.trackEvent({
+                appId: activeApp,
+                context: 'performance',
+                eventType: 'performance',
+                label: 'time_to_interactive',
+                meta: { ttiMs: Math.round(performance.now() - start) }
+            });
+        });
     }
     return () => {
         if (activeApp && activeAppStartTimeRef.current > 0) {
             const duration = (Date.now() - activeAppStartTimeRef.current) / 1000;
             if (duration > 1) {
-                systemCore.trackInteraction(activeApp, 'dwell', { durationSeconds: duration });
+                void systemCore.trackEvent({
+                    appId: activeApp,
+                    context: 'app',
+                    eventType: 'dwell',
+                    label: 'app_dwell',
+                    meta: { durationSeconds: duration }
+                });
             }
+            void systemCore.trackEvent({
+                appId: activeApp,
+                context: 'app',
+                eventType: 'close',
+                label: 'close_app'
+            });
         }
     };
   }, [activeApp]);
@@ -255,12 +327,26 @@ const App: React.FC = () => {
 
   const handleInstall = (id: AppID) => {
     if (!installedApps.includes(id)) setInstalledApps([...installedApps, id]);
+    void systemCore.trackEvent({
+        appId: AppID.STORE,
+        context: 'store',
+        eventType: 'install',
+        label: 'install_app',
+        meta: { targetApp: id }
+    });
   };
 
   const handleUninstall = (id: AppID) => {
     if (ALL_APPS[id].isSystem) return;
     setInstalledApps(prev => prev.filter(appId => appId !== id));
     if (openApps.includes(id)) closeApp(id);
+    void systemCore.trackEvent({
+        appId: AppID.STORE,
+        context: 'store',
+        eventType: 'delete',
+        label: 'uninstall_app',
+        meta: { targetApp: id }
+    });
   };
 
   const launchApp = (id: AppID) => {
@@ -284,6 +370,13 @@ const App: React.FC = () => {
   const navigateToApp = (fromId: AppID, toId: AppID) => {
     closeApp(fromId);
     setTimeout(() => launchApp(toId), 50);
+    void systemCore.trackEvent({
+        appId: 'SYSTEM',
+        context: 'navigation',
+        eventType: 'navigation',
+        label: 'app_switch',
+        meta: { from: fromId, to: toId }
+    });
   };
 
   const handleBackgroundClick = (e: React.MouseEvent) => {
@@ -358,7 +451,13 @@ const App: React.FC = () => {
     return p;
   }, [installedApps, layout.maxApps]);
 
-  const currentWallpaper = WALLPAPERS.find(w => w.id === wallpaperId) || WALLPAPERS[0];
+  const builtInWallpaper = WALLPAPERS.find(w => w.id === wallpaperId);
+  const currentWallpaper = builtInWallpaper || (customWallpaperImage ? {
+    id: wallpaperId,
+    name: 'Custom',
+    thumbnail: customWallpaperImage,
+    style: { backgroundImage: `url(${customWallpaperImage})` }
+  } : WALLPAPERS[0]);
   const filteredApps = (Object.values(ALL_APPS) as AppConfig[]).filter(app => installedApps.includes(app.id) && (app.name.toLowerCase().includes(searchQuery.toLowerCase()) || app.description.toLowerCase().includes(searchQuery.toLowerCase()))).sort((a, b) => a.name.localeCompare(b.name));
 
   // --- LOGIN SCREEN ---

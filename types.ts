@@ -72,10 +72,53 @@ export interface Insight {
   timestamp: number;
 }
 
-export interface InteractionEvent {
+export type TelemetryEventType =
+  | 'open'
+  | 'close'
+  | 'navigation'
+  | 'click'
+  | 'input'
+  | 'error'
+  | 'performance'
+  | 'save'
+  | 'delete'
+  | 'generate'
+  | 'regenerate'
+  | 'download'
+  | 'copy'
+  | 'dwell'
+  | 'install'
+  | 'import'
+  | 'export'
+  | 'submit'
+  | 'success';
+
+export interface TelemetryEvent {
+  uid?: string;
+  sessionId: string;
   appId: string;
-  action: 'open' | 'generate' | 'regenerate' | 'edit' | 'copy' | 'download' | 'dwell' | 'abandon' | 'success' | 'dislike' | 'completion' | 'error' | 'sys_event' | 'install_app' | 'open_app';
+  context: string;
+  eventType: TelemetryEventType;
+  label: string;
   timestamp: number;
-  metadata?: Record<string, unknown> | null;
-  score?: number; // Optional on client, calculated on server
+  meta?: Record<string, unknown> | null;
+}
+
+export interface TelemetryEventInput {
+  appId: string;
+  context: string;
+  eventType: TelemetryEventType;
+  label?: string;
+  meta?: Record<string, unknown> | null;
+}
+
+export interface SystemPolicy {
+  tokenPolicy: {
+    defaultDailyTokens: number;
+    defaultPerMinute: number;
+    killSwitchEnabled: boolean;
+    tiers: Record<string, { dailyTokens: number; perMinute: number }>;
+  };
+  modelMapping: Record<string, string>;
+  updatedAt?: number;
 }

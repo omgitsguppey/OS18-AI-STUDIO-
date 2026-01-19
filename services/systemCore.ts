@@ -2,6 +2,7 @@ import { storage, STORES } from './storageService';
 import { logEvent } from './telemetryTransport';
 import { authService } from './authService'; // Added for Admin check
 import { auth } from './firebaseConfig';     // Added to access current user
+import type { TelemetryEvent, TelemetryEventInput, TelemetryEventType } from '../types';
 
 /**
  * SYSTEM INTELLIGENCE LAYER (v3.0 - Phase 1: Dumb Collector)
@@ -27,15 +28,6 @@ export interface Insight {
   message: string;
   confidence: number;
   timestamp: number;
-}
-
-export interface InteractionEvent {
-  appId: string;
-  action: 'open' | 'generate' | 'regenerate' | 'edit' | 'copy' | 'download' | 'dwell' | 'abandon' | 'success' | 'dislike' | 'completion' | 'error' | 'sys_event' | 'install_app' | 'open_app';
-  timestamp: number;
-  metadata?: any;
-  // Score is now optional/null on client, calculated server-side
-  score?: number; 
 }
 
 export interface SystemState {
@@ -80,6 +72,7 @@ const DEFAULT_STATE: SystemState = {
 };
 
 const LOCAL_STATE_KEY = 'core_state_v3';
+const SESSION_KEY = 'telemetry_session_v1';
 
 const readLocalStateSnapshot = (): SystemState => {
   if (typeof window === 'undefined') return DEFAULT_STATE;
@@ -100,7 +93,63 @@ const writeLocalStateSnapshot = (state: SystemState) => {
   localStorage.setItem(LOCAL_STATE_KEY, JSON.stringify(state));
 };
 
+const createSessionId = () => {
+  if (typeof window === 'undefined') return 'server-session';
+  const existing = localStorage.getItem(SESSION_KEY);
+  if (existing) return existing;
+  const next = typeof crypto !== 'undefined' && 'randomUUID' in crypto
+    ? crypto.randomUUID()
+    : `session_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+  localStorage.setItem(SESSION_KEY, next);
+  return next;
+};
+
+const sanitizeLabel = (label: string) => {
+  const trimmed = label.trim();
+  if (!trimmed) return 'unknown';
+  return trimmed.slice(0, 48);
+};
+
+const sanitizeMetaKey = (key: string) => {
+  const lowered = key.toLowerCase();
+  return !(
+    lowered.includes('password') ||
+    lowered.includes('secret') ||
+    lowered.includes('clipboard') ||
+    lowered.includes('email') ||
+    lowered.includes('content')
+  );
+};
+
+const sanitizeMeta = (meta?: Record<string, unknown> | null) => {
+  if (!meta) return null;
+  const sanitized: Record<string, unknown> = {};
+  Object.entries(meta).forEach(([key, value]) => {
+    if (!key || !sanitizeMetaKey(key)) return;
+    if (typeof value === 'string') {
+      sanitized[key] = value.slice(0, 80);
+      return;
+    }
+    if (typeof value === 'number' || typeof value === 'boolean') {
+      sanitized[key] = value;
+      return;
+    }
+    if (Array.isArray(value)) {
+      sanitized[key] = value.slice(0, 10).map((entry) => {
+        if (typeof entry === 'string') return entry.slice(0, 40);
+        if (typeof entry === 'number' || typeof entry === 'boolean') return entry;
+        return null;
+      });
+      return;
+    }
+  });
+  return sanitized;
+};
+
 class SystemCoreService {
+  private sessionId = createSessionId();
+  private recentEvents: TelemetryEvent[] = [];
+
   async init() {
     // TODO: Wire server-synced state into a local snapshot when SyncService is ready.
     return;
@@ -108,33 +157,38 @@ class SystemCoreService {
 
   // --- 1. CORE TRACKING API (The Pipeline) ---
 
-  async trackInteraction(
-    appId: string, 
-    action: InteractionEvent['action'], 
-    metadata?: any
-  ) {
+  async trackEvent(input: TelemetryEventInput) {
     const state = readLocalStateSnapshot();
-    if (!state.telemetryEnabled && action === 'sys_event') return;
+    if (!state.telemetryEnabled) return;
 
-    // Construct Event
-    const event: InteractionEvent = { 
-        appId, 
-        action, 
-        timestamp: Date.now(), 
-        metadata 
+    const eventType: TelemetryEventType = input.eventType;
+    const event: TelemetryEvent = {
+      sessionId: this.sessionId,
+      appId: input.appId,
+      context: input.context,
+      eventType,
+      label: sanitizeLabel(input.label ?? eventType),
+      timestamp: Date.now(),
+      meta: sanitizeMeta(input.meta)
     };
 
     // DELEGATE: Send to Transport Layer immediately
     // No buffering, no scoring, no analysis here.
     logEvent(event);
+    this.recentEvents = [event, ...this.recentEvents].slice(0, 100);
   }
 
   // Public API for Raw DOM Events
   trackRawEvent(type: 'click' | 'keypress' | 'scroll', label: string) {
-      const state = readLocalStateSnapshot();
-      if (!state.telemetryEnabled) return;
-      const cleanLabel = label.length > 40 ? label.substring(0, 40) + '...' : label;
-      this.trackInteraction('SYSTEM', 'sys_event', { type, label: cleanLabel });
+    const state = readLocalStateSnapshot();
+    if (!state.telemetryEnabled) return;
+    void this.trackEvent({
+      appId: 'SYSTEM',
+      context: 'system',
+      eventType: type === 'click' ? 'click' : 'input',
+      label: sanitizeLabel(label),
+      meta: { source: type }
+    });
   }
 
   // --- 2. CREDIT SYSTEM ---
@@ -232,9 +286,8 @@ class SystemCoreService {
       };
   }
 
-  getRecentEvents(limit = 20): InteractionEvent[] {
-      // Client no longer holds buffer. 
-      return [];
+  getRecentEvents(limit = 20): TelemetryEvent[] {
+    return this.recentEvents.slice(0, limit);
   }
 
   getMemory(): LearnedFact[] {

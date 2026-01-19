@@ -15,19 +15,53 @@ service cloud.firestore {
       allow read, write: if isSignedIn() && request.auth.uid == uid;
     }
 
-    // STORE COUNTERS (read-only for owner)
-    match /store_counters/{uid}/stores/{storeName}/shards/{shardId} {
-      allow read: if isSignedIn() && request.auth.uid == uid;
-      allow write: if false;
-    }
-
     // TELEMETRY (write-only for users)
     match /sys_telemetry/{document=**} {
       allow write: if isSignedIn();
       allow read: if isAdmin();
     }
 
+    // TELEMETRY SESSIONS (server-only writes)
+    match /telemetry_sessions/{document=**} {
+      allow read, write: if false;
+    }
+
+    // STATS
+    match /stats/users/{uid}/apps/{appId}/summary {
+      allow read: if isSignedIn() && request.auth.uid == uid;
+      allow write: if false;
+    }
+
+    match /stats/apps/{appId}/summary {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
+    match /stats/telemetry/{document=**} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
+    match /stats/system/{document=**} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
+    match /stats_users/{uid} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
     // SYSTEM / GOD MODE
+    match /system/policy {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    match /system_user_policies/{uid} {
+      allow read, write: if isAdmin();
+    }
+
     match /system/{document=**} {
       allow read, write: if isAdmin();
     }

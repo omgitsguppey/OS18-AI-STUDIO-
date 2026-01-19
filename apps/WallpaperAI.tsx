@@ -72,6 +72,13 @@ const WallpaperAI: React.FC = () => {
     if (!prompt.trim() || isGenerating || credits <= 0) return;
     
     setIsGenerating(true);
+    void systemCore.trackEvent({
+      appId: AppID.WALLPAPER_AI,
+      context: 'generation',
+      eventType: 'generate',
+      label: 'generate_wallpaper',
+      meta: { promptLength: prompt.length, style: selectedStyle, resolution, aspectRatio }
+    });
     // Don't clear image yet, so we don't flash empty if they switch tabs
     try {
       const success = await systemCore.useCredit(1);
@@ -91,6 +98,13 @@ const WallpaperAI: React.FC = () => {
       }
     } catch (e) {
       console.error(e);
+      void systemCore.trackEvent({
+        appId: AppID.WALLPAPER_AI,
+        context: 'generation',
+        eventType: 'error',
+        label: 'generation_error',
+        meta: { messageLength: e instanceof Error ? e.message.length : 0 }
+      });
       alert("Generation error. Check your API key quotas.");
     } finally {
       setIsGenerating(false);
@@ -113,13 +127,21 @@ const WallpaperAI: React.FC = () => {
           const wallpaperData = {
               id: wallpaperId,
               name: prompt.substring(0, 20) || "Untitled",
-              thumbnail: `data:image/png;base64,${generatedImage}`, 
+              thumbnail: `data:image/png;base64,${generatedImage}`,
+              image: `data:image/png;base64,${generatedImage}`,
               style: { backgroundImage: `url(data:image/png;base64,${generatedImage})` },
               createdAt: Date.now()
           };
 
           await storage.add(STORES.WALLPAPERS, wallpaperData); 
           window.dispatchEvent(new CustomEvent('sys_wallpaper_added', { detail: wallpaperData }));
+          void systemCore.trackEvent({
+            appId: AppID.WALLPAPER_AI,
+            context: 'collection',
+            eventType: 'save',
+            label: 'save_wallpaper',
+            meta: { wallpaperId }
+          });
           alert("Saved to Collection!");
       } catch (e) {
           console.error("Save failed", e);
@@ -130,10 +152,30 @@ const WallpaperAI: React.FC = () => {
 
   const handleSetWallpaper = async (imgData: string) => {
       try {
-          await storage.set(STORES.SYSTEM, 'wallpaper_id', 'custom_generated');
+          const wallpaperId = `wp_${Date.now()}`;
+          const dataUrl = `data:image/png;base64,${imgData}`;
+          const wallpaperData = {
+            id: wallpaperId,
+            name: prompt.substring(0, 20) || "Untitled",
+            thumbnail: dataUrl,
+            image: dataUrl,
+            style: { backgroundImage: `url(${dataUrl})` },
+            createdAt: Date.now()
+          };
+          await storage.add(STORES.WALLPAPERS, wallpaperData);
+          await storage.set(STORES.SYSTEM, 'wallpaper_id', wallpaperId);
+          await storage.set(STORES.SYSTEM, 'wallpaper_active', { id: wallpaperId, image: dataUrl });
+          window.dispatchEvent(new CustomEvent('sys_wallpaper_added', { detail: wallpaperData }));
           window.dispatchEvent(new CustomEvent('sys_settings_update', { 
-              detail: { wallpaperImage: `data:image/png;base64,${imgData}` } 
+              detail: { wallpaperId: wallpaperId, wallpaperImage: dataUrl } 
           }));
+          void systemCore.trackEvent({
+            appId: AppID.WALLPAPER_AI,
+            context: 'collection',
+            eventType: 'save',
+            label: 'set_wallpaper',
+            meta: { wallpaperId }
+          });
           alert("Wallpaper updated!");
       } catch (e) {
           console.error(e);

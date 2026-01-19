@@ -28,11 +28,23 @@ const AppStore: React.FC<AppStoreProps> = ({ installedApps, onInstall, onLaunch 
   const handleAction = (appId: AppID, isInstalled: boolean) => {
       if (isInstalled) {
           // FIX: Use 'open' which is a valid InteractionType
-          systemCore.trackInteraction(AppID.STORE, 'open', { target_app: appId });
+          void systemCore.trackEvent({
+            appId: AppID.STORE,
+            context: 'store',
+            eventType: 'open',
+            label: 'open_app',
+            meta: { targetApp: appId }
+          });
           onLaunch(appId);
       } else {
           // FIX: Use 'download' which is a valid InteractionType for installs
-          systemCore.trackInteraction(AppID.STORE, 'download', { target_app: appId });
+          void systemCore.trackEvent({
+            appId: AppID.STORE,
+            context: 'store',
+            eventType: 'download',
+            label: 'download_app',
+            meta: { targetApp: appId }
+          });
           onInstall(appId);
       }
   };
