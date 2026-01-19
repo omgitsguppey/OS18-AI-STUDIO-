@@ -19,7 +19,7 @@ import {
   Table as TableIcon
 } from 'lucide-react';
 import { storage, STORES } from '../services/storageService';
-import { parseRevenueFile, RevenueRecord } from '../services/geminiService';
+import { RevenueRecord } from '../services/geminiService';
 
 const AnalyticsAI: React.FC = () => {
   const [view, setView] = useState<'dashboard' | 'data'>('dashboard');
@@ -28,6 +28,7 @@ const AnalyticsAI: React.FC = () => {
   const [selectedLabel, setSelectedLabel] = useState<string>('All Labels');
   const [isReady, setIsReady] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const workerRef = useRef<Worker | null>(null);
 
   // Edit Mode State
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -45,6 +46,38 @@ const AnalyticsAI: React.FC = () => {
       }
     };
     init();
+  }, []);
+
+  useEffect(() => {
+    // Web Worker keeps CSV/PDF parsing off the main thread to preserve UI responsiveness.
+    const worker = new Worker(new URL('./analyticsRevenueWorker.ts', import.meta.url), { type: 'module' });
+    workerRef.current = worker;
+    worker.onmessage = (event) => {
+      const { records, error } = event.data || {};
+      if (error) {
+        console.error(error);
+        alert("Failed to parse file. Please ensure it's a valid music revenue statement.");
+      } else if (records) {
+        const newRecords = records.map((r: Omit<RevenueRecord, 'id'>) => ({
+          ...r,
+          id: Date.now().toString() + Math.random().toString(36).substr(2, 9)
+        }));
+        setData(prev => [...prev, ...newRecords]);
+        alert(`Successfully parsed ${newRecords.length} records.`);
+      }
+      setIsProcessing(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    };
+    worker.onerror = (err) => {
+      console.error(err);
+      alert("Failed to parse file. Please ensure it's a valid music revenue statement.");
+      setIsProcessing(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    };
+    return () => {
+      worker.terminate();
+      workerRef.current = null;
+    };
   }, []);
 
   useEffect(() => {
@@ -93,22 +126,17 @@ const AnalyticsAI: React.FC = () => {
     return { totalRevenue, topTrackName, topTrackRev, platforms };
   }, [filteredData]);
 
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files || e.target.files.length === 0) return;
     const file = e.target.files[0];
     setIsProcessing(true);
-    try {
-      const records = await parseRevenueFile(file);
-      const newRecords = records.map(r => ({ ...r, id: Date.now().toString() + Math.random().toString(36).substr(2, 9) }));
-      setData(prev => [...prev, ...newRecords]);
-      alert(`Successfully parsed ${newRecords.length} records.`);
-    } catch (err) {
-      console.error(err);
-      alert("Failed to parse file. Please ensure it's a valid music revenue statement.");
-    } finally {
+    if (!workerRef.current) {
+      // TODO: Provide a fallback if worker initialization fails.
       setIsProcessing(false);
-      if (fileInputRef.current) fileInputRef.current.value = '';
+      alert("Failed to parse file. Please ensure it's a valid music revenue statement.");
+      return;
     }
+    workerRef.current.postMessage({ file });
   };
 
   const handleAddRow = () => {
