@@ -180,7 +180,11 @@ export function logEvent(event: TelemetryEvent): void {
     getCachedAuthToken();
   }
   if (!lastAuthToken) {
-    void getAuthToken();
+    void getAuthToken().then((token) => {
+      if (token && queue.length > 0) {
+        void flush();
+      }
+    });
   }
   queue.push(event);
   if (queue.length > MAX_QUEUE_SIZE) {
