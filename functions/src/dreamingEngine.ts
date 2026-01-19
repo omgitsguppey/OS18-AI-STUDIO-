@@ -25,7 +25,7 @@ export interface InteractionEvent {
           "download" | "dwell" | "abandon" | "success" | "dislike" |
           "completion" | "error" | "sys_event" | "install_app" | "open_app";
   timestamp: number;
-  metadata?: any; // eslint-disable-line @typescript-eslint/no-explicit-any
+  metadata?: unknown;
   score?: number;
 }
 
@@ -69,6 +69,166 @@ const SCORES = {
   INSTALL: 15,
 };
 
+const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+const isFiniteNumber = (value: unknown): value is number =>
+  typeof value === "number" && Number.isFinite(value);
+
+const normalizeRecord = (
+  value: unknown
+): Record<string, unknown> => (isPlainObject(value) ? value : {});
+
+const normalizeStringArrayRecord = (
+  value: unknown
+): Record<string, string[]> => {
+  const record = normalizeRecord(value);
+  const normalized: Record<string, string[]> = {};
+  Object.entries(record).forEach(([key, entry]) => {
+    if (Array.isArray(entry)) {
+      normalized[key] = entry.filter(
+        (item): item is string => typeof item === "string"
+      );
+    }
+  });
+  return normalized;
+};
+
+const normalizeNumberRecord = (value: unknown): Record<string, number> => {
+  const record = normalizeRecord(value);
+  const normalized: Record<string, number> = {};
+  Object.entries(record).forEach(([key, entry]) => {
+    if (isFiniteNumber(entry)) {
+      normalized[key] = entry;
+    }
+  });
+  return normalized;
+};
+
+const normalizeArrayRecord = (value: unknown): Record<string, unknown[]> => {
+  const record = normalizeRecord(value);
+  const normalized: Record<string, unknown[]> = {};
+  Object.entries(record).forEach(([key, entry]) => {
+    if (Array.isArray(entry)) {
+      normalized[key] = entry;
+    }
+  });
+  return normalized;
+};
+
+const normalizeLearnedFacts = (value: unknown): LearnedFact[] => {
+  if (!Array.isArray(value)) return [];
+  const normalized: LearnedFact[] = [];
+  for (const entry of value) {
+    if (!isPlainObject(entry)) continue;
+    const content = entry.content;
+    const scope = entry.scope;
+    const confidence = entry.confidence;
+    const source = entry.source;
+    const timestamp = entry.timestamp;
+
+    if (typeof content !== "string") continue;
+    if (scope !== "Global" &&
+        scope !== "Creative" &&
+        scope !== "Business" &&
+        scope !== "Utility") {
+      continue;
+    }
+    if (!isFiniteNumber(confidence)) continue;
+    if (source !== "implicit_edit" &&
+        source !== "explicit_save" &&
+        source !== "clipboard" &&
+        source !== "dwell") {
+      continue;
+    }
+    if (!isFiniteNumber(timestamp)) continue;
+
+    normalized.push({
+      content,
+      scope,
+      confidence,
+      source,
+      timestamp,
+    });
+  }
+  return normalized;
+};
+
+const normalizeInsights = (value: unknown): Insight[] => {
+  if (!Array.isArray(value)) return [];
+  const normalized: Insight[] = [];
+  for (const entry of value) {
+    if (!isPlainObject(entry)) continue;
+    const id = entry.id;
+    const type = entry.type;
+    const message = entry.message;
+    const confidence = entry.confidence;
+    const timestamp = entry.timestamp;
+
+    if (typeof id !== "string") continue;
+    if (type !== "pattern" && type !== "anomaly" && type !== "behavior") {
+      continue;
+    }
+    if (typeof message !== "string") continue;
+    if (!isFiniteNumber(confidence)) continue;
+    if (!isFiniteNumber(timestamp)) continue;
+
+    normalized.push({
+      id,
+      type,
+      message,
+      confidence,
+      timestamp,
+    });
+  }
+  return normalized;
+};
+
+const normalizeSystemState = (raw: unknown): SystemState => {
+  const defaults: SystemState = {
+    userArchetype: "General User",
+    activePromptVariant: "A",
+    learnedFacts: [],
+    insights: [],
+    telemetryEnabled: true,
+    keywordWeights: {},
+    negativeConstraints: {},
+    goldenTemplates: {},
+    sessionScore: 0,
+    lastGenerationTimestamp: 0,
+    totalInputChars: 0,
+    totalOutputChars: 0,
+    requestCount: 0,
+    credits: {count: 20, lastReset: new Date().toDateString()},
+  };
+
+  if (!isPlainObject(raw)) {
+    return defaults;
+  }
+
+  const creditsRaw = isPlainObject(raw.credits) ? raw.credits : {};
+  const creditCount = isFiniteNumber(creditsRaw.count) ? creditsRaw.count : defaults.credits.count;
+  const lastReset = typeof creditsRaw.lastReset === "string" ? creditsRaw.lastReset : defaults.credits.lastReset;
+
+  return {
+    userArchetype: typeof raw.userArchetype === "string" ? raw.userArchetype : defaults.userArchetype,
+    activePromptVariant: raw.activePromptVariant === "B" ? "B" : "A",
+    learnedFacts: normalizeLearnedFacts(raw.learnedFacts),
+    insights: normalizeInsights(raw.insights),
+    telemetryEnabled: typeof raw.telemetryEnabled === "boolean" ? raw.telemetryEnabled : defaults.telemetryEnabled,
+    keywordWeights: normalizeNumberRecord(raw.keywordWeights),
+    negativeConstraints: normalizeStringArrayRecord(raw.negativeConstraints),
+    goldenTemplates: normalizeArrayRecord(raw.goldenTemplates),
+    sessionScore: isFiniteNumber(raw.sessionScore) ? raw.sessionScore : defaults.sessionScore,
+    lastGenerationTimestamp: isFiniteNumber(raw.lastGenerationTimestamp) ?
+      raw.lastGenerationTimestamp : defaults.lastGenerationTimestamp,
+    totalInputChars: isFiniteNumber(raw.totalInputChars) ? raw.totalInputChars : defaults.totalInputChars,
+    totalOutputChars: isFiniteNumber(raw.totalOutputChars) ? raw.totalOutputChars : defaults.totalOutputChars,
+    requestCount: isFiniteNumber(raw.requestCount) ? raw.requestCount : defaults.requestCount,
+    credits: {count: creditCount, lastReset},
+  };
+};
+
 /**
  * The Dreaming Engine: Server-side heuristic analysis and memory consolidation.
  */
@@ -90,9 +250,9 @@ export class DreamingEngine {
       let state: SystemState;
 
       if (!doc.exists) {
-        state = this.getDefaultState();
+        state = normalizeSystemState(null);
       } else {
-        state = doc.data() as SystemState;
+        state = normalizeSystemState(doc.data());
       }
 
       let batchScore = 0;
@@ -109,6 +269,7 @@ export class DreamingEngine {
 
       this.analyzePatterns(scoredEvents, state);
       this.consolidateMemories(scoredEvents, state);
+      this.updateAggregateMetrics(scoredEvents, state);
 
       t.set(systemMemRef, state, {merge: true});
     });
@@ -123,18 +284,25 @@ export class DreamingEngine {
    */
   private calculateScore(event: InteractionEvent): number {
     let score = 0;
-    const {action, metadata} = event;
+    const {action} = event;
+    const metadata = isPlainObject(event.metadata) ? event.metadata : null;
 
     if (action === "regenerate") {
       score = SCORES.REGENERATE_SLOW;
     }
     if (action === "dwell") {
-      score = (metadata?.duration || 0) > 5 ?
+      const duration = metadata && typeof metadata.duration === "number" ?
+        metadata.duration : 0;
+      score = duration > 5 ?
         SCORES.DWELL_LONG : SCORES.DWELL_SHORT;
     }
-    if (action === "edit" && metadata?.original && metadata?.final) {
-      if (Math.abs(metadata.original.length - metadata.final.length) < 20) {
-        score = SCORES.EDIT;
+    if (action === "edit" && metadata) {
+      const original = metadata.original;
+      const final = metadata.final;
+      if (typeof original === "string" && typeof final === "string") {
+        if (Math.abs(original.length - final.length) < 20) {
+          score = SCORES.EDIT;
+        }
       }
     }
 
@@ -212,6 +380,37 @@ export class DreamingEngine {
   }
 
   /**
+   * Aggregates usage metrics from validated completion events.
+   * @param {InteractionEvent[]} events - Events to analyze.
+   * @param {SystemState} state - State to update.
+   */
+  private updateAggregateMetrics(events: InteractionEvent[], state: SystemState) {
+    for (const event of events) {
+      if (event.action !== "completion") continue;
+      const metadata = isPlainObject(event.metadata) ? event.metadata : null;
+      if (!metadata) continue;
+
+      const inputLength = metadata.inputLength;
+      const outputLength = metadata.outputLength;
+
+      if (typeof inputLength === "number" && Number.isFinite(inputLength)) {
+        state.totalInputChars += inputLength;
+      }
+
+      if (typeof outputLength === "number" && Number.isFinite(outputLength)) {
+        state.totalOutputChars += outputLength;
+      }
+
+      if (typeof event.timestamp === "number" && Number.isFinite(event.timestamp)) {
+        state.lastGenerationTimestamp = Math.max(
+          state.lastGenerationTimestamp,
+          event.timestamp
+        );
+      }
+    }
+  }
+
+  /**
    * Adds a new insight to the state.
    * @param {SystemState} state - The system state to update.
    * @param {string} message - The insight message.
@@ -269,26 +468,4 @@ export class DreamingEngine {
     }
   }
 
-  /**
-   * Returns the default blank state.
-   * @return {SystemState} Default state object.
-   */
-  private getDefaultState(): SystemState {
-    return {
-      userArchetype: "General User",
-      activePromptVariant: "A",
-      learnedFacts: [],
-      insights: [],
-      telemetryEnabled: true,
-      keywordWeights: {},
-      negativeConstraints: {},
-      goldenTemplates: {},
-      sessionScore: 0,
-      lastGenerationTimestamp: 0,
-      totalInputChars: 0,
-      totalOutputChars: 0,
-      requestCount: 0,
-      credits: {count: 20, lastReset: new Date().toDateString()},
-    };
-  }
 }
