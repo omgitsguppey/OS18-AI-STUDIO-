@@ -1,5 +1,5 @@
 
-import { getAIClient, APP_MODEL_CONFIG, fileToBase64 } from "./core";
+import { APP_MODEL_CONFIG, fileToBase64, generateAIContent } from "./core";
 import { AppID } from "../../types";
 import { LocalIntelligence } from "../localIntelligence";
 
@@ -20,14 +20,12 @@ export const generateMilestoneImage = async (
   style: string,
   coverArtFile?: File
 ): Promise<string | null> => {
-  const ai = getAIClient();
-
   // Scenario A: Editing existing cover art (Gemini Nano/Flash Image)
   if (coverArtFile) {
     const base64Data = await fileToBase64(coverArtFile);
     const prompt = `Overlay text "${streamCount} STREAMS" on this cover art. Stylish font.`;
 
-    const response = await ai.models.generateContent({
+    const response = await generateAIContent({
       model: APP_MODEL_CONFIG['achievements_edit'],
       contents: {
         parts: [

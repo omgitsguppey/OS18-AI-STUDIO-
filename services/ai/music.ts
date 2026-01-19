@@ -1,6 +1,7 @@
 
 import { Type } from "@google/genai";
-import { getAIClient, APP_MODEL_CONFIG } from "./core";
+import { APP_MODEL_CONFIG, generateAIContent } from "./core";
+import { getArray, getBoolean, getString, mapRecordArray, parseJsonObject } from "./parse";
 import { AppID } from "../../types";
 import { LocalIntelligence } from "../localIntelligence";
 
@@ -29,7 +30,6 @@ export const generatePlaylistMetadata = async (
   length: number,
   colorContext: string
 ): Promise<Omit<GeneratedPlaylist, 'id' | 'createdAt' | 'coverImageBase64'>> => {
-  const ai = getAIClient();
   const prompt = `Create a playlist. Moods: ${moods.join(', ')}. Aesthetic: ${aesthetic}. Tracks: ${length}.
   Return JSON with title, description, and tracks.`;
 
@@ -37,7 +37,7 @@ export const generatePlaylistMetadata = async (
   const generatedColors = LocalIntelligence.generatePalette(aesthetic || moods[0] || "Music");
   const primaryColor = generatedColors[0].hex;
 
-  const response = await ai.models.generateContent({
+  const response = await generateAIContent({
     model: APP_MODEL_CONFIG[AppID.PLAYLIST_AI],
     contents: prompt,
     config: {
@@ -66,11 +66,26 @@ export const generatePlaylistMetadata = async (
     }
   });
 
-  const data = JSON.parse(response.text || '{}');
-  
-  return {
-      ...data,
+  const data = parseJsonObject(response.text);
+  if (!data) {
+    return {
+      title: "",
+      description: "",
+      tracks: [],
       primaryColor
+    };
+  }
+  const tracks = mapRecordArray(getArray(data, "tracks")).map((track) => ({
+    title: getString(track, "title", ""),
+    artist: getString(track, "artist", ""),
+    duration: getString(track, "duration", ""),
+    explicit: getBoolean(track, "explicit", false)
+  })).filter((track) => track.title && track.artist);
+  return {
+    title: getString(data, "title", ""),
+    description: getString(data, "description", ""),
+    tracks,
+    primaryColor
   };
 };
 
@@ -79,10 +94,9 @@ export const generatePlaylistCover = async (
   aesthetic: string,
   color: string
 ): Promise<string | null> => {
-  const ai = getAIClient();
   const prompt = `Album cover for playlist "${title}". Aesthetic: ${aesthetic}. Theme Color: ${color}. Minimalist 3D art.`;
 
-  const response = await ai.models.generateContent({
+  const response = await generateAIContent({
     model: 'gemini-3-pro-image-preview', 
     contents: { parts: [{ text: prompt }] },
     config: {

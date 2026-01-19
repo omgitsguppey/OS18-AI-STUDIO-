@@ -1,6 +1,7 @@
 
 import { Type } from "@google/genai";
 import { generateOptimizedContent } from "./core";
+import { getArray, getString, mapRecordArray, parseJsonObject } from "./parse";
 import { AppID } from "../../types";
 import { processDramaDataInWorker } from "../dramaWorker";
 
@@ -53,7 +54,15 @@ export const generateCaption = async (
     }
   );
 
-  return JSON.parse(response.text || '{}');
+  const result = parseJsonObject(response.text);
+  if (!result) return {};
+  return {
+    title: getString(result, "title", ""),
+    description: getString(result, "description", ""),
+    tags: getString(result, "tags", ""),
+    postCaption: getString(result, "postCaption", ""),
+    onPostCaption: getString(result, "onPostCaption", "")
+  };
 };
 
 export const trainCaptionAI = async (
@@ -219,5 +228,24 @@ export const generateFamePlan = async (idea: string, currentStatus: string): Pro
     }
   );
 
-  return JSON.parse(response.text || '{}');
+  const result = parseJsonObject(response.text);
+  if (!result) {
+    return { projectTitle: "", theAngle: "", targetArchetype: "", phases: [] };
+  }
+  const phases = mapRecordArray(getArray(result, "phases")).map((phase) => ({
+    phaseName: getString(phase, "phaseName", ""),
+    goal: getString(phase, "goal", ""),
+    steps: mapRecordArray(getArray(phase, "steps")).map((step) => ({
+      day: getString(step, "day", ""),
+      action: getString(step, "action", ""),
+      psychologicalTactic: getString(step, "psychologicalTactic", ""),
+      majorLabelSecret: getString(step, "majorLabelSecret", "")
+    })).filter((step) => step.day && step.action && step.psychologicalTactic && step.majorLabelSecret)
+  })).filter((phase) => phase.phaseName && phase.goal);
+  return {
+    projectTitle: getString(result, "projectTitle", ""),
+    theAngle: getString(result, "theAngle", ""),
+    targetArchetype: getString(result, "targetArchetype", ""),
+    phases
+  };
 };

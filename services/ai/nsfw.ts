@@ -1,6 +1,7 @@
 
 import { Type } from "@google/genai";
-import { getAIClient, APP_MODEL_CONFIG } from "./core";
+import { APP_MODEL_CONFIG, generateAIContent } from "./core";
+import { getArray, getString, isRecord, mapRecordArray, mapStringArray, parseJsonObject } from "./parse";
 import { AppID } from "../../types";
 
 export interface NSFWConsultation {
@@ -27,7 +28,6 @@ export interface NSFWStrategy {
 }
 
 export const generateNSFWConsultation = async (niche: string): Promise<NSFWConsultation> => {
-  const ai = getAIClient();
   const systemInstruction = `You are a specialized Brand Consultant for the adult content industry (OnlyFans, Patreon, Romance Authors).
   Your goal is to help creators monetize through EMOTION and PSYCHOLOGY, avoiding explicit content violation issues on social media.
   
@@ -40,7 +40,7 @@ export const generateNSFWConsultation = async (niche: string): Promise<NSFWConsu
   Tone: Professional, direct, understanding of the industry nuance.
   `;
 
-  const response = await ai.models.generateContent({
+  const response = await generateAIContent({
     model: APP_MODEL_CONFIG[AppID.NSFW_AI],
     contents: `Niche Concept: "${niche}". Generate consultation questions.`,
     config: {
@@ -56,11 +56,12 @@ export const generateNSFWConsultation = async (niche: string): Promise<NSFWConsu
     }
   });
 
-  return JSON.parse(response.text || '{"questions": []}');
+  const result = parseJsonObject(response.text);
+  if (!result) return { questions: [] };
+  return { questions: mapStringArray(getArray(result, "questions")) };
 };
 
 export const generateNSFWStrategy = async (niche: string, answers: string[]): Promise<NSFWStrategy> => {
-  const ai = getAIClient();
   const systemInstruction = `You are an elite Revenue Strategist for adult content creators.
   Your expertise is maximizing revenue by selling INTENTION and DESIRE, rather than just nudity.
   
@@ -81,7 +82,7 @@ export const generateNSFWStrategy = async (niche: string, answers: string[]): Pr
   
   Generate the Strategy.`;
 
-  const response = await ai.models.generateContent({
+  const response = await generateAIContent({
     model: APP_MODEL_CONFIG[AppID.NSFW_AI],
     contents: prompt,
     config: {
@@ -127,5 +128,33 @@ export const generateNSFWStrategy = async (niche: string, answers: string[]): Pr
     }
   });
 
-  return JSON.parse(response.text || '{}');
+  const result = parseJsonObject(response.text);
+  if (!result) {
+    return {
+      persona: { archetype: "", hook: "", sirenCall: "", bio: "" },
+      tosGuide: { safeForSocials: [], premiumOnly: [] },
+      revenuePlan: []
+    };
+  }
+  const personaRecord = isRecord(result.persona) ? result.persona : {};
+  const tosGuideRecord = isRecord(result.tosGuide) ? result.tosGuide : {};
+  const revenuePlan = mapRecordArray(getArray(result, "revenuePlan")).map((entry) => ({
+    day: getString(entry, "day", ""),
+    theme: getString(entry, "theme", ""),
+    action: getString(entry, "action", ""),
+    psychology: getString(entry, "psychology", "")
+  })).filter((entry) => entry.day && entry.theme && entry.action && entry.psychology);
+  return {
+    persona: {
+      archetype: getString(personaRecord, "archetype", ""),
+      hook: getString(personaRecord, "hook", ""),
+      sirenCall: getString(personaRecord, "sirenCall", ""),
+      bio: getString(personaRecord, "bio", "")
+    },
+    tosGuide: {
+      safeForSocials: mapStringArray(getArray(tosGuideRecord, "safeForSocials")),
+      premiumOnly: mapStringArray(getArray(tosGuideRecord, "premiumOnly"))
+    },
+    revenuePlan
+  };
 };

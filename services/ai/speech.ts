@@ -1,6 +1,6 @@
 
 import { Modality } from "@google/genai";
-import { getAIClient, APP_MODEL_CONFIG } from "./core";
+import { APP_MODEL_CONFIG, generateAIContent } from "./core";
 import { AppID } from "../../types";
 
 // Declare global lamejs type
@@ -28,8 +28,6 @@ export const generateSpeech = async (
   stability: number, // 0 to 1 (mapped to temperature, inv)
   tone: string // "Neutral", "Happy", "Serious", etc.
 ): Promise<SpeechGeneration> => {
-  const ai = getAIClient();
-  
   // Prompt Engineering to simulate Speed and Tone
   // Stability controls temperature (High stability = Low temperature)
   const temperature = 1 - stability; // 0.0 (stable) to 1.0 (variable)
@@ -39,7 +37,7 @@ export const generateSpeech = async (
   
   const prompt = `${toneInstruction} ${speedInstruction} \n\n${text}`;
 
-  const response = await ai.models.generateContent({
+  const response = await generateAIContent({
     model: APP_MODEL_CONFIG[AppID.SPEECH_AI],
     contents: {
         parts: [{ text: prompt }]

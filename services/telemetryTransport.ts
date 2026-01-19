@@ -1,4 +1,5 @@
 import type { InteractionEvent } from '../types';
+import { auth } from './firebaseConfig';
 
 const ENDPOINT = '/api/telemetry/ingest';
 const FLUSH_INTERVAL_MS = 10_000;
@@ -6,6 +7,7 @@ const BATCH_LIMIT = 10;
 
 let queue: InteractionEvent[] = [];
 let flushTimer: ReturnType<typeof setTimeout> | null = null;
+let tokenCache: { token: string; expiry: number } | null = null;
 
 const scheduleFlush = () => {
   if (flushTimer) return;
@@ -15,22 +17,37 @@ const scheduleFlush = () => {
   }, FLUSH_INTERVAL_MS);
 };
 
-const postBatch = (events: InteractionEvent[]) => {
-  if (events.length === 0) return;
+const getAuthToken = async (): Promise<string | null> => {
+  const user = auth.currentUser;
+  if (!user) return null;
+  const now = Date.now();
+  if (tokenCache && tokenCache.expiry > now + 30_000) {
+    return tokenCache.token;
+  }
+  const token = await user.getIdToken();
+  tokenCache = { token, expiry: now + 55 * 60 * 1000 };
+  return token;
+};
+
+const postBatch = async (events: InteractionEvent[]): Promise<boolean> => {
+  if (events.length === 0) return true;
   try {
-    void fetch(ENDPOINT, {
+    const token = await getAuthToken();
+    if (!token) {
+      console.warn('Telemetry dropped: no auth token available.');
+      return false;
+    }
+    const response = await fetch(ENDPOINT, {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json'
-        // TODO: Add auth headers when server-side auth is available.
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`
       },
       body: JSON.stringify({ events })
-      // TODO: Add retry/backoff strategy once telemetry SLA is defined.
-    }).catch(() => {
-      // Fail silently to avoid impacting UI.
     });
+    return response.ok;
   } catch {
-    // Fail silently to avoid impacting UI.
+    return false;
   }
 };
 
@@ -38,21 +55,19 @@ const flush = () => {
   if (queue.length === 0) return;
   const payload = queue;
   queue = [];
-  postBatch(payload);
+  void postBatch(payload).then((ok) => {
+    if (!ok) {
+      queue = payload.concat(queue);
+    }
+  });
 };
 
 const flushSync = () => {
   if (queue.length === 0) return;
-  const payload = JSON.stringify({ events: queue });
   const pending = queue;
   queue = [];
   try {
-    if (typeof navigator !== 'undefined' && typeof navigator.sendBeacon === 'function') {
-      const blob = new Blob([payload], { type: 'application/json' });
-      navigator.sendBeacon(ENDPOINT, blob);
-    } else {
-      postBatch(pending);
-    }
+    void postBatch(pending);
   } catch {
     // Fail silently to avoid impacting UI.
   }

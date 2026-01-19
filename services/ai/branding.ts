@@ -1,6 +1,7 @@
 
 import { Type } from "@google/genai";
-import { getAIClient, APP_MODEL_CONFIG } from "./core";
+import { APP_MODEL_CONFIG, generateAIContent } from "./core";
+import { getArray, getString, isRecord, mapRecordArray, parseJsonObject } from "./parse";
 import { AppID } from "../../types";
 import { LocalIntelligence } from "../localIntelligence";
 
@@ -34,12 +35,11 @@ export interface BrandKit {
 }
 
 export const generateBrandQuestions = async (brandName: string): Promise<string[]> => {
-  const ai = getAIClient();
   const prompt = `I am building a brand identity for "${brandName}".
   Generate exactly 5 short, strategic questions to help define the brand's personality, audience, and goals.
   Return JSON object with a "questions" array of strings.`;
 
-  const response = await ai.models.generateContent({
+  const response = await generateAIContent({
     model: APP_MODEL_CONFIG[AppID.BRAND_KIT_AI],
     contents: prompt,
     config: {
@@ -54,13 +54,12 @@ export const generateBrandQuestions = async (brandName: string): Promise<string[
     }
   });
 
-  const data = JSON.parse(response.text || '{"questions": []}');
-  return data.questions || [];
+  const data = parseJsonObject(response.text);
+  if (!data) return [];
+  return getArray(data, "questions").filter((item): item is string => typeof item === "string");
 };
 
 export const generateBrandKit = async (brandName: string, qaPairs: {q: string, a: string}[] = []): Promise<Omit<BrandKit, 'id' | 'createdAt'>> => {
-  const ai = getAIClient();
-  
   // Generate colors locally based on the name hash
   const colors = LocalIntelligence.generatePalette(brandName);
 
@@ -76,7 +75,7 @@ export const generateBrandKit = async (brandName: string, qaPairs: {q: string, a
   Do NOT generate colors (handled by system).
   `;
 
-  const response = await ai.models.generateContent({
+  const response = await generateAIContent({
     model: APP_MODEL_CONFIG[AppID.BRAND_KIT_AI],
     contents: `Brand Name: "${brandName}". Generate Kit.`,
     config: {
@@ -123,10 +122,42 @@ export const generateBrandKit = async (brandName: string, qaPairs: {q: string, a
     }
   });
 
-  const aiData = JSON.parse(response.text || '{}');
+  const aiData = parseJsonObject(response.text);
+  if (!aiData) {
+    return {
+      brandName,
+      slogan: "",
+      valueProposition: "",
+      missionStatement: "",
+      targetAudience: "",
+      colors,
+      typography: { headingFont: "", bodyFont: "" },
+      metrics: [],
+      pressKit: { shortBio: "", boilerplate: "" }
+    };
+  }
+  const typographyRecord = isRecord(aiData.typography) ? aiData.typography : {};
+  const pressKitRecord = isRecord(aiData.pressKit) ? aiData.pressKit : {};
+  const metrics = mapRecordArray(getArray(aiData, "metrics")).map((entry) => ({
+    label: getString(entry, "label", ""),
+    target: getString(entry, "target", "")
+  })).filter((entry) => entry.label && entry.target);
   
   return {
-    ...aiData,
-    colors: colors
+    brandName: getString(aiData, "brandName", brandName),
+    slogan: getString(aiData, "slogan", ""),
+    valueProposition: getString(aiData, "valueProposition", ""),
+    missionStatement: getString(aiData, "missionStatement", ""),
+    targetAudience: getString(aiData, "targetAudience", ""),
+    colors: colors,
+    typography: {
+      headingFont: getString(typographyRecord, "headingFont", ""),
+      bodyFont: getString(typographyRecord, "bodyFont", "")
+    },
+    metrics,
+    pressKit: {
+      shortBio: getString(pressKitRecord, "shortBio", ""),
+      boilerplate: getString(pressKitRecord, "boilerplate", "")
+    }
   };
 };

@@ -2,6 +2,7 @@ import { storage, STORES } from './storageService';
 import { logEvent } from './telemetryTransport';
 import { authService } from './authService'; // Added for Admin check
 import { auth } from './firebaseConfig';     // Added to access current user
+import { syncService } from './syncService';
 
 /**
  * SYSTEM INTELLIGENCE LAYER (v3.0 - Phase 1: Dumb Collector)
@@ -79,25 +80,8 @@ const DEFAULT_STATE: SystemState = {
   }
 };
 
-const LOCAL_STATE_KEY = 'core_state_v3';
-
-const readLocalStateSnapshot = (): SystemState => {
-  if (typeof window === 'undefined') return DEFAULT_STATE;
-  // TODO: Replace localStorage snapshot with server-synced state when available.
-  const raw = localStorage.getItem(LOCAL_STATE_KEY);
-  if (!raw) return DEFAULT_STATE;
-  try {
-    const parsed = JSON.parse(raw) as Partial<SystemState>;
-    return { ...DEFAULT_STATE, ...parsed };
-  } catch (error) {
-    console.warn('[SystemCore] Failed to parse local state snapshot.', error);
-    return DEFAULT_STATE;
-  }
-};
-
-const writeLocalStateSnapshot = (state: SystemState) => {
-  if (typeof window === 'undefined') return;
-  localStorage.setItem(LOCAL_STATE_KEY, JSON.stringify(state));
+const getNormalizedState = (): SystemState => {
+  return syncService.getState() ?? DEFAULT_STATE;
 };
 
 class SystemCoreService {
@@ -113,7 +97,7 @@ class SystemCoreService {
     action: InteractionEvent['action'], 
     metadata?: any
   ) {
-    const state = readLocalStateSnapshot();
+    const state = getNormalizedState();
     if (!state.telemetryEnabled && action === 'sys_event') return;
 
     // Construct Event
@@ -131,7 +115,7 @@ class SystemCoreService {
 
   // Public API for Raw DOM Events
   trackRawEvent(type: 'click' | 'keypress' | 'scroll', label: string) {
-      const state = readLocalStateSnapshot();
+      const state = getNormalizedState();
       if (!state.telemetryEnabled) return;
       const cleanLabel = label.length > 40 ? label.substring(0, 40) + '...' : label;
       this.trackInteraction('SYSTEM', 'sys_event', { type, label: cleanLabel });
@@ -142,7 +126,7 @@ class SystemCoreService {
   getCredits(): number {
       // Admin Bypass: Show effectively unlimited credits
       if (authService.isAdmin(auth.currentUser)) return 999;
-      const state = readLocalStateSnapshot();
+      const state = getNormalizedState();
       return state.credits.count;
   }
 
@@ -150,12 +134,11 @@ class SystemCoreService {
       // Admin Bypass: Never face credit restrictions
       if (authService.isAdmin(auth.currentUser)) return true;
 
-      const state = readLocalStateSnapshot();
+      const state = getNormalizedState();
       if (state.credits.count < amount) return false;
-      writeLocalStateSnapshot({
-        ...state,
+      syncService.updateState({
         credits: { ...state.credits, count: state.credits.count - amount }
-      });
+      }, DEFAULT_STATE);
       return true;
   }
 
@@ -171,7 +154,7 @@ class SystemCoreService {
 
   getOptimizedPrompt(originalPrompt: string, appId: string, scope: MemoryScope = 'Global'): string {
       let systemContext = "";
-      const state = readLocalStateSnapshot();
+      const state = getNormalizedState();
 
       const variant = state.activePromptVariant;
       if (variant === 'A') systemContext += "Style: Direct and Professional. ";
@@ -203,15 +186,13 @@ class SystemCoreService {
   // --- 4. STATE MANAGEMENT ---
 
   async updateStateFromSync(newState: Partial<SystemState>) {
-      const state = readLocalStateSnapshot();
-      writeLocalStateSnapshot({ ...state, ...newState });
-      // TODO: Replace local snapshot updates with server-synced state wiring.
+      syncService.updateState(newState, DEFAULT_STATE);
   }
 
   // --- PUBLIC API FOR SETTINGS APP ---
 
   getMetrics() {
-      const state = readLocalStateSnapshot();
+      const state = getNormalizedState();
       const efficiency = state.totalOutputChars > 0 
         ? Math.round((state.totalOutputChars / (state.totalInputChars + 1)) * 100) 
         : 0;
@@ -238,21 +219,19 @@ class SystemCoreService {
   }
 
   getMemory(): LearnedFact[] {
-      const state = readLocalStateSnapshot();
+      const state = getNormalizedState();
       return [...state.learnedFacts];
   }
 
   async forget(timestamp: number) {
-      const state = readLocalStateSnapshot();
-      writeLocalStateSnapshot({
-        ...state,
+      const state = getNormalizedState();
+      syncService.updateState({
         learnedFacts: state.learnedFacts.filter(f => f.timestamp !== timestamp)
-      });
+      }, DEFAULT_STATE);
   }
 
   async toggleTelemetry(enabled: boolean) {
-      const state = readLocalStateSnapshot();
-      writeLocalStateSnapshot({ ...state, telemetryEnabled: enabled });
+      syncService.updateState({ telemetryEnabled: enabled }, DEFAULT_STATE);
   }
 
   // RESTORED: This method is required by SettingsApp.tsx
@@ -261,7 +240,7 @@ class SystemCoreService {
   }
   
   async lobotomy() {
-      writeLocalStateSnapshot(DEFAULT_STATE);
+      syncService.updateState(DEFAULT_STATE, DEFAULT_STATE);
   }
 }
 

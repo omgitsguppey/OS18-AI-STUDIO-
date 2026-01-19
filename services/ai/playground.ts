@@ -1,18 +1,18 @@
 
 import { Type } from "@google/genai";
-import { getAIClient, APP_MODEL_CONFIG } from "./core";
+import { APP_MODEL_CONFIG, generateAIContent } from "./core";
+import { getArray, getBoolean, getNumber, getString, mapStringArray, parseJsonObject } from "./parse";
 import { AppID } from "../../types";
 
 // --- 1. PIXEL EVOLVER ---
 export const evolvePixelGrid = async (prompt: string, currentGrid: string[] | null, feedback: string): Promise<string[]> => {
-  const ai = getAIClient();
   const instruction = `You are a Pixel Art AI. You output ONLY a JSON array of 64 hex codes (8x8 grid).
   Task: Draw "${prompt}".
   ${currentGrid ? `Previous Attempt (flattened): ${JSON.stringify(currentGrid)}` : ""}
   ${feedback ? `User Feedback on previous attempt: "${feedback}". Improve based on this.` : ""}
   Use vibrant colors.`;
 
-  const response = await ai.models.generateContent({
+  const response = await generateAIContent({
     model: APP_MODEL_CONFIG[AppID.AI_PLAYGROUND],
     contents: "Generate grid.",
     config: {
@@ -28,16 +28,18 @@ export const evolvePixelGrid = async (prompt: string, currentGrid: string[] | nu
     }
   });
   
-  const result = JSON.parse(response.text || '{}');
-  return result.grid || Array(64).fill('#000000');
+  const result = parseJsonObject(response.text);
+  if (!result) return Array(64).fill('#000000');
+  const grid = getArray(result, "grid");
+  const colors = grid.filter((item): item is string => typeof item === "string");
+  return colors.length === 64 ? colors : Array(64).fill('#000000');
 };
 
 // --- 2. FLOW STATE (RAP) ---
 export const generateRap = async (topic: string, difficulty: number): Promise<{ verses: string[], score: number }> => {
-  const ai = getAIClient();
   const complexity = difficulty === 1 ? "Simple AABB rhyme scheme." : difficulty === 2 ? "Multi-syllabic rhymes, internal rhyming." : "God-tier flow, dense wordplay, metaphors.";
   
-  const response = await ai.models.generateContent({
+  const response = await generateAIContent({
     model: APP_MODEL_CONFIG[AppID.AI_PLAYGROUND],
     contents: `Write a short 4-bar rap verse about "${topic}".
     Complexity Level: ${complexity}
@@ -55,13 +57,17 @@ export const generateRap = async (topic: string, difficulty: number): Promise<{ 
     }
   });
 
-  return JSON.parse(response.text || '{"verses": [], "score": 0}');
+  const result = parseJsonObject(response.text);
+  if (!result) return { verses: [], score: 0 };
+  return {
+    verses: mapStringArray(getArray(result, "verses")),
+    score: getNumber(result, "score", 0)
+  };
 };
 
 // --- 3. ALCHEMY (CRAFT) ---
 export const combineEmojis = async (itemA: string, itemB: string): Promise<{ result: string, emoji: string, isNew: boolean }> => {
-  const ai = getAIClient();
-  const response = await ai.models.generateContent({
+  const response = await generateAIContent({
     model: APP_MODEL_CONFIG[AppID.AI_PLAYGROUND],
     contents: `Combine concept "${itemA}" and "${itemB}". What new item does this create?
     Example: Fire + Water = Steam (💨).
@@ -80,7 +86,13 @@ export const combineEmojis = async (itemA: string, itemB: string): Promise<{ res
     }
   });
 
-  return JSON.parse(response.text || '{"result": "Nothing", "emoji": "❓", "isNew": false}');
+  const result = parseJsonObject(response.text);
+  if (!result) return { result: "Nothing", emoji: "❓", isNew: false };
+  return {
+    result: getString(result, "result", "Nothing"),
+    emoji: getString(result, "emoji", "❓"),
+    isNew: getBoolean(result, "isNew", false)
+  };
 };
 
 // --- 4. FACT EATER (PET) ---
@@ -92,7 +104,6 @@ export interface PetState {
 }
 
 export const feedPet = async (fact: string, currentState: PetState): Promise<{ response: string, newMood: string, leveledUp: boolean }> => {
-  const ai = getAIClient();
   const instruction = `You are a digital pet named ${currentState.name}.
   Current Mood: ${currentState.mood}. Intelligence Level: ${currentState.level}.
   The user just fed you a fact: "${fact}".
@@ -102,7 +113,7 @@ export const feedPet = async (fact: string, currentState: PetState): Promise<{ r
   
   Output JSON.`;
 
-  const response = await ai.models.generateContent({
+  const response = await generateAIContent({
     model: APP_MODEL_CONFIG[AppID.AI_PLAYGROUND],
     contents: "React to the food.",
     config: {
@@ -120,13 +131,18 @@ export const feedPet = async (fact: string, currentState: PetState): Promise<{ r
     }
   });
 
-  return JSON.parse(response.text || '{}');
+  const result = parseJsonObject(response.text);
+  if (!result) return { response: "", newMood: currentState.mood, leveledUp: false };
+  return {
+    response: getString(result, "response", ""),
+    newMood: getString(result, "newMood", currentState.mood),
+    leveledUp: getBoolean(result, "leveledUp", false)
+  };
 };
 
 // --- 5. STORY BRANCH ---
 export const generateStoryNode = async (context: string, choice: string): Promise<{ text: string, options: string[] }> => {
-  const ai = getAIClient();
-  const response = await ai.models.generateContent({
+  const response = await generateAIContent({
     model: APP_MODEL_CONFIG[AppID.AI_PLAYGROUND],
     contents: `Continue the story.
     Context so far: ${context}
@@ -148,5 +164,11 @@ export const generateStoryNode = async (context: string, choice: string): Promis
     }
   });
 
-  return JSON.parse(response.text || '{"text": "The end.", "options": ["Restart"]}');
+  const result = parseJsonObject(response.text);
+  if (!result) return { text: "The end.", options: ["Restart"] };
+  const options = mapStringArray(getArray(result, "options"));
+  return {
+    text: getString(result, "text", "The end."),
+    options: options.length > 0 ? options : ["Restart"]
+  };
 };

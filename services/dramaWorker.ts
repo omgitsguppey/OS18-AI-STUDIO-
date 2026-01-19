@@ -13,11 +13,23 @@ export const processDramaDataInWorker = (text: string): Promise<any> => {
             cleanText = cleanText.replace(/\`\`\`json|\`\`\`/g, '').trim();
           }
           
-          const data = JSON.parse(cleanText);
-          const rawEvents = data.events || [];
+          let data = null;
+          try {
+            data = JSON.parse(cleanText);
+          } catch (parseError) {
+            data = null;
+          }
+          const payload = (data && typeof data === 'object') ? data : {};
+          const rawEvents = Array.isArray(payload.events) ? payload.events : [];
+          const safeEvents = rawEvents.filter((event) => {
+            return event && typeof event === 'object'
+              && typeof event.date === 'string'
+              && typeof event.title === 'string'
+              && typeof event.description === 'string';
+          });
           
           // Sort events chronologically (newest first)
-          const sortedEvents = rawEvents.sort((a, b) => {
+          const sortedEvents = safeEvents.sort((a, b) => {
              const dateA = new Date(a.date).getTime();
              const dateB = new Date(b.date).getTime();
              return dateB - dateA; 
@@ -27,7 +39,7 @@ export const processDramaDataInWorker = (text: string): Promise<any> => {
             success: true, 
             data: {
               events: sortedEvents,
-              summary: data.summary || "No summary available."
+              summary: typeof payload.summary === 'string' ? payload.summary : "No summary available."
             }
           });
         } catch (error) {

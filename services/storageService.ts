@@ -1,7 +1,7 @@
 import { db, auth } from "./firebaseConfig";
 import { 
   collection, doc, getDoc, setDoc, deleteDoc, getDocs, getCountFromServer,
-  writeBatch, query, where, addDoc, limit
+  writeBatch, query, where, addDoc, limit, orderBy, startAfter, QueryDocumentSnapshot
 } from "firebase/firestore";
 import { AppID } from "../types";
 
@@ -37,6 +37,11 @@ export const STORES = {
   WALLPAPERS: 'user_wallpapers_data' // NEW: Dedicated Wallpaper Store
 };
 
+const LOCAL_ONLY_STORES = new Set<string>([STORES.PASSWORDS]);
+const LOCAL_STORE_PREFIX = 'local_store';
+
+const getLocalKey = (storeName: string, key: string) => `${LOCAL_STORE_PREFIX}:${storeName}:${key}`;
+
 export interface StoreStats {
   name: string;
   count: number;
@@ -70,6 +75,15 @@ class StorageService {
 
   // Save with specific Key
   async set(storeName: string, key: string, value: any): Promise<void> {
+    if (LOCAL_ONLY_STORES.has(storeName)) {
+      try {
+        const payload = { ...value, _updated: Date.now() };
+        localStorage.setItem(getLocalKey(storeName, key), JSON.stringify(payload));
+      } catch (e) {
+        console.error("Local Write Error", e);
+      }
+      return;
+    }
     if (!auth.currentUser) return; // Silent fail if offline/logged out
     try {
         const ref = this.getDocRef(storeName, key);
@@ -83,6 +97,17 @@ class StorageService {
 
   // Add new item (Auto-ID)
   async add(storeName: string, value: any): Promise<string | null> {
+      if (LOCAL_ONLY_STORES.has(storeName)) {
+        try {
+          const id = Date.now().toString();
+          const payload = { ...value, _created: Date.now() };
+          localStorage.setItem(getLocalKey(storeName, id), JSON.stringify(payload));
+          return id;
+        } catch (e) {
+          console.error("Local Add Error", e);
+          return null;
+        }
+      }
       if (!auth.currentUser) return null;
       try {
           const col = this.getCollectionRef(storeName);
@@ -109,6 +134,16 @@ class StorageService {
   }
 
   async get<T>(storeName: string, key: string): Promise<T | null> {
+    if (LOCAL_ONLY_STORES.has(storeName)) {
+        const raw = localStorage.getItem(getLocalKey(storeName, key));
+        if (!raw) return null;
+        try {
+            return JSON.parse(raw) as T;
+        } catch (e) {
+            console.error("Local Read Error", e);
+            return null;
+        }
+    }
     if (!auth.currentUser) return null;
     try {
         const ref = this.getDocRef(storeName, key);
@@ -124,6 +159,22 @@ class StorageService {
   }
 
   async getAll<T>(storeName: string): Promise<T[]> {
+    if (LOCAL_ONLY_STORES.has(storeName)) {
+        const items: T[] = [];
+        const prefix = `${LOCAL_STORE_PREFIX}:${storeName}:`;
+        for (let i = 0; i < localStorage.length; i++) {
+            const key = localStorage.key(i);
+            if (!key || !key.startsWith(prefix)) continue;
+            const raw = localStorage.getItem(key);
+            if (!raw) continue;
+            try {
+                items.push(JSON.parse(raw) as T);
+            } catch (e) {
+                console.error("Local Read Error", e);
+            }
+        }
+        return items;
+    }
     if (!auth.currentUser) return [];
     try {
         const col = this.getCollectionRef(storeName);
@@ -135,16 +186,33 @@ class StorageService {
   }
 
   async remove(storeName: string, key: string): Promise<void> {
+    if (LOCAL_ONLY_STORES.has(storeName)) {
+        localStorage.removeItem(getLocalKey(storeName, key));
+        return;
+    }
     if (!auth.currentUser) return;
     await deleteDoc(this.getDocRef(storeName, key));
   }
 
   async clearStore(storeName: string): Promise<void> {
+    if (LOCAL_ONLY_STORES.has(storeName)) {
+        const prefix = `${LOCAL_STORE_PREFIX}:${storeName}:`;
+        const keysToRemove: string[] = [];
+        for (let i = 0; i < localStorage.length; i++) {
+            const key = localStorage.key(i);
+            if (key && key.startsWith(prefix)) keysToRemove.push(key);
+        }
+        keysToRemove.forEach((key) => localStorage.removeItem(key));
+        return;
+    }
     if (!auth.currentUser) return;
     const col = this.getCollectionRef(storeName);
+    let lastDoc: QueryDocumentSnapshot | null = null;
 
     while (true) {
-        const snap = await getDocs(query(col, limit(500)));
+        const baseQuery = query(col, orderBy('__name__'), limit(500));
+        const pageQuery = lastDoc ? query(col, orderBy('__name__'), startAfter(lastDoc), limit(500)) : baseQuery;
+        const snap = await getDocs(pageQuery);
         if (snap.empty) return;
 
         // Batch delete (limit 500 per batch in Firestore)
@@ -153,6 +221,8 @@ class StorageService {
             batch.delete(doc.ref);
         });
         await batch.commit();
+
+        lastDoc = snap.docs[snap.docs.length - 1] ?? null;
     }
   }
 

@@ -230,7 +230,7 @@ const PasswordsApp: React.FC = () => {
                </div>
             )}
             <div className="py-8 text-center text-xs text-gray-400">
-               {filteredEntries.length} Accounts • Secured Locally
+               {filteredEntries.length} Accounts • Stored locally on this device
             </div>
           </div>
         </>

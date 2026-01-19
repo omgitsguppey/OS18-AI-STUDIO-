@@ -1,5 +1,6 @@
 import { Type } from "@google/genai";
 import { generateOptimizedContent } from "./core";
+import { getString, parseJsonObject } from "./parse";
 import { AppID } from "../../types";
 
 const TRAP_LEXICON = {
@@ -81,8 +82,9 @@ export const generateTrapBar = async (
       }
     );
     
-    const parsed = JSON.parse(response.text || '{}');
-    return parsed.bar || "Motion silent, Maybach tinted, I'm already gone.";
+    const parsed = parseJsonObject(response.text);
+    if (!parsed) return "Motion silent, Maybach tinted, I'm already gone.";
+    return getString(parsed, "bar", "Motion silent, Maybach tinted, I'm already gone.");
   } catch (error) {
     console.error("TrapAI Algorithmic Error:", error);
     return "The vault is locked. Motion too heavy.";

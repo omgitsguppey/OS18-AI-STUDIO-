@@ -1,6 +1,7 @@
 
 import { Type } from "@google/genai";
-import { getAIClient, APP_MODEL_CONFIG } from "./core";
+import { APP_MODEL_CONFIG, generateAIContent } from "./core";
+import { getArray, getString, mapRecordArray, parseJsonObject } from "./parse";
 import { AppID } from "../../types";
 
 export interface ViralPlan {
@@ -26,8 +27,6 @@ export const generateViralContentPlan = async (
   artistName: string,
   context: string
 ): Promise<Omit<ViralPlan, 'id' | 'createdAt'>> => {
-  const ai = getAIClient();
-  
   // Template stitching: We ask AI only for the specific creative variable 'nicheAccounts'
   // The roadmap structure is largely deterministic for this strategy.
   
@@ -44,7 +43,7 @@ export const generateViralContentPlan = async (
 
   const prompt = `Target: "${targetName}" by ${artistName}. Context: "${context}".`;
 
-  const response = await ai.models.generateContent({
+  const response = await generateAIContent({
     model: APP_MODEL_CONFIG[AppID.VIRAL_PLAN_AI],
     contents: prompt,
     config: {
@@ -73,7 +72,13 @@ export const generateViralContentPlan = async (
     }
   });
 
-  const aiResult = JSON.parse(response.text || '{}');
+  const aiResult = parseJsonObject(response.text);
+  const accounts = aiResult ? mapRecordArray(getArray(aiResult, "nicheAccounts")).map((entry) => ({
+    niche: getString(entry, "niche", ""),
+    accountNameIdea: getString(entry, "accountNameIdea", ""),
+    contentStyle: getString(entry, "contentStyle", ""),
+    audioUtilization: getString(entry, "audioUtilization", "")
+  })).filter((entry) => entry.niche && entry.accountNameIdea && entry.contentStyle && entry.audioUtilization) : [];
 
   // Hard-coded Strategy Template (Deterministic)
   const quarterlyRoadmap = [
@@ -121,8 +126,8 @@ export const generateViralContentPlan = async (
 
   return {
     target: targetName,
-    nicheAccounts: aiResult.nicheAccounts || [],
-    contentIdStrategy: aiResult.contentIdStrategy || "Focus on background usage.",
+    nicheAccounts: accounts,
+    contentIdStrategy: aiResult ? getString(aiResult, "contentIdStrategy", "Focus on background usage.") : "Focus on background usage.",
     quarterlyRoadmap
   };
 };
