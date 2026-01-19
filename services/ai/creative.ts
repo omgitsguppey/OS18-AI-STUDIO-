@@ -1,5 +1,5 @@
 import { Type } from "@google/genai";
-import { generateOptimizedContent, APP_MODEL_CONFIG, getAIClient } from "./core";
+import { generateOptimizedContent, APP_MODEL_CONFIG, getAIClient, normalizeAiJson } from "./core";
 import { AppID } from "../../types";
 import { LocalIntelligence } from "../localIntelligence";
 
@@ -49,43 +49,45 @@ export const analyzeLyrics = async (songTitle: string, lyrics: string): Promise<
   5. Key Metaphors list.
   `;
 
+  const responseSchema = {
+    type: Type.OBJECT,
+    properties: {
+      songTitle: { type: Type.STRING },
+      metaphoricDensity: { type: Type.NUMBER },
+      emotionalResonance: { type: Type.NUMBER },
+      linguisticSignature: { type: Type.STRING },
+      detailedBreakdown: {
+        type: Type.OBJECT,
+        properties: {
+          vocabulary: { type: Type.STRING },
+          metaphors: { type: Type.STRING },
+          emotion: { type: Type.STRING },
+          structure: { type: Type.STRING },
+          rhythm: { type: Type.STRING }
+        },
+        required: ["vocabulary", "metaphors", "emotion", "structure", "rhythm"]
+      },
+      keyMetaphors: {
+        type: Type.ARRAY,
+        items: { type: Type.STRING }
+      }
+    },
+    required: [
+      "songTitle", "metaphoricDensity", "emotionalResonance",
+      "linguisticSignature", "detailedBreakdown", "keyMetaphors"
+    ]
+  };
+
   const response = await generateOptimizedContent(
     AppID.LYRICS_AI,
     prompt,
     {
       responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          songTitle: { type: Type.STRING },
-          metaphoricDensity: { type: Type.NUMBER },
-          emotionalResonance: { type: Type.NUMBER },
-          linguisticSignature: { type: Type.STRING },
-          detailedBreakdown: {
-            type: Type.OBJECT,
-            properties: {
-              vocabulary: { type: Type.STRING },
-              metaphors: { type: Type.STRING },
-              emotion: { type: Type.STRING },
-              structure: { type: Type.STRING },
-              rhythm: { type: Type.STRING }
-            },
-            required: ["vocabulary", "metaphors", "emotion", "structure", "rhythm"]
-          },
-          keyMetaphors: {
-            type: Type.ARRAY,
-            items: { type: Type.STRING }
-          }
-        },
-        required: [
-          "songTitle", "metaphoricDensity", "emotionalResonance", 
-          "linguisticSignature", "detailedBreakdown", "keyMetaphors"
-        ]
-      }
+      responseSchema
     }
   );
 
-  const aiResult = JSON.parse(response.text || '{}');
+  const aiResult = await normalizeAiJson<LyricAnalysis>(response.text || '', responseSchema);
   
   // 3. Merge Local Stats with AI Result
   return { 
@@ -109,26 +111,28 @@ export const generateArtistProfile = async (artistName: string, songs: LyricAnal
   
   Identify core recurring themes, how their vocabulary has evolved, emotional arc, signature style, and suggest a creative direction.`;
 
+  const responseSchema = {
+    type: Type.OBJECT,
+    properties: {
+      coreThemes: { type: Type.ARRAY, items: { type: Type.STRING } },
+      vocabularyEvolution: { type: Type.STRING },
+      emotionalArc: { type: Type.STRING },
+      signatureStyle: { type: Type.STRING },
+      suggestedCreativeDirection: { type: Type.STRING }
+    },
+    required: ['coreThemes', 'vocabularyEvolution', 'emotionalArc', 'signatureStyle', 'suggestedCreativeDirection']
+  };
+
   const response = await generateOptimizedContent(
     AppID.LYRICS_AI,
     prompt,
     {
       responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          coreThemes: { type: Type.ARRAY, items: { type: Type.STRING } },
-          vocabularyEvolution: { type: Type.STRING },
-          emotionalArc: { type: Type.STRING },
-          signatureStyle: { type: Type.STRING },
-          suggestedCreativeDirection: { type: Type.STRING }
-        },
-        required: ['coreThemes', 'vocabularyEvolution', 'emotionalArc', 'signatureStyle', 'suggestedCreativeDirection']
-      }
+      responseSchema
     }
   );
 
-  return JSON.parse(response.text || '{}');
+  return normalizeAiJson<ArtistProfileAnalysis>(response.text || '', responseSchema);
 };
 
 // --- CONTENT AI ---
@@ -177,30 +181,35 @@ export const generateContentEpisode = async (
 
   const prompt = `Idea: "${userPrompt}". ${povInstruction}`;
 
+  const responseSchema = {
+    type: Type.OBJECT,
+    properties: {
+      title: { type: Type.STRING },
+      format: { type: Type.STRING, enum: ['Short Form', 'Mid Form', 'Long Form'] },
+      platform: { type: Type.STRING, enum: ['YouTube', 'TikTok', 'Instagram'] },
+      pov: { type: Type.STRING, enum: ['First Person', 'Second Person', 'Third Person'] },
+      hook: { type: Type.STRING },
+      script: { type: Type.STRING },
+      arcNotes: { type: Type.STRING },
+      episodeNumber: { type: Type.INTEGER }
+    },
+    required: ['title', 'format', 'platform', 'pov', 'hook', 'script', 'arcNotes']
+  };
+
   const response = await generateOptimizedContent(
     AppID.CONTENT_AI,
     prompt,
     {
       systemInstruction: systemInstruction,
       responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          title: { type: Type.STRING },
-          format: { type: Type.STRING, enum: ['Short Form', 'Mid Form', 'Long Form'] },
-          platform: { type: Type.STRING, enum: ['YouTube', 'TikTok', 'Instagram'] },
-          pov: { type: Type.STRING, enum: ['First Person', 'Second Person', 'Third Person'] },
-          hook: { type: Type.STRING },
-          script: { type: Type.STRING },
-          arcNotes: { type: Type.STRING },
-          episodeNumber: { type: Type.INTEGER }
-        },
-        required: ['title', 'format', 'platform', 'pov', 'hook', 'script', 'arcNotes']
-      }
+      responseSchema
     }
   );
 
-  return JSON.parse(response.text || '{}');
+  return normalizeAiJson<Omit<ContentEpisode, 'id' | 'createdAt' | 'seasonId'>>(
+    response.text || '',
+    responseSchema
+  );
 };
 
 export const generateSeasonTitle = async (episodes: ContentEpisode[]): Promise<string> => {
@@ -208,21 +217,24 @@ export const generateSeasonTitle = async (episodes: ContentEpisode[]): Promise<s
   const prompt = `Based on these episode hooks, generate a short 3-5 word Title for this Season.
   Episodes: ${summary}`;
 
+  const responseSchema = {
+    type: Type.OBJECT,
+    properties: {
+      seasonTitle: { type: Type.STRING }
+    }
+  };
+
   const response = await generateOptimizedContent(
     AppID.CONTENT_AI,
     prompt,
     {
       responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          seasonTitle: { type: Type.STRING }
-        }
-      }
+      responseSchema
     }
   );
 
-  return JSON.parse(response.text || '{}').seasonTitle || "New Season";
+  const result = await normalizeAiJson<{ seasonTitle: string }>(response.text || '', responseSchema);
+  return result.seasonTitle || "New Season";
 };
 
 // --- IMAGE GENERATION (WALLPAPER & ALBUM ART) ---

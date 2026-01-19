@@ -12,7 +12,7 @@ import { systemCore } from '../services/systemCore';
 import { consoleService, LogEntry } from '../services/consoleService';
 import { authService } from '../services/authService';
 import { auth } from '../services/firebaseConfig';
-import { onAuthStateChanged, User } from 'firebase/auth';
+import { User } from 'firebase/auth';
 import { AppID } from '../types';
 import { ALL_APPS, WALLPAPERS } from '../constants';
 
@@ -605,7 +605,7 @@ const SettingsApp: React.FC<SettingsAppProps> = ({
   
   // Auth State
   const [user, setUser] = useState<User | null>(auth.currentUser);
-  const isAdmin = user?.email === 'uylusjohnson@gmail.com';
+  const [isAdmin, setIsAdmin] = useState(false);
 
   // App Selection State
   const [selectedAppId, setSelectedAppId] = useState<AppID | null>(null);
@@ -628,8 +628,12 @@ const SettingsApp: React.FC<SettingsAppProps> = ({
 
   // 1. Auth Listener
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (u) => setUser(u));
-    return () => unsub();
+    const unsubscribeUser = authService.onUserChange((u) => setUser(u));
+    const unsubscribeAdmin = authService.onAdminClaimChange((claim) => setIsAdmin(claim));
+    return () => {
+      unsubscribeUser();
+      unsubscribeAdmin();
+    };
   }, []);
 
   // 2. Safe Load Settings

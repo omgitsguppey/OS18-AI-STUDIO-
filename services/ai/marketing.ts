@@ -1,6 +1,6 @@
 
 import { Type } from "@google/genai";
-import { getAIClient, APP_MODEL_CONFIG } from "./core";
+import { getAIClient, APP_MODEL_CONFIG, normalizeAiJson } from "./core";
 import { AppID } from "../../types";
 
 export interface ViralPlan {
@@ -44,36 +44,41 @@ export const generateViralContentPlan = async (
 
   const prompt = `Target: "${targetName}" by ${artistName}. Context: "${context}".`;
 
+  const responseSchema = {
+    type: Type.OBJECT,
+    properties: {
+      nicheAccounts: {
+        type: Type.ARRAY,
+        items: {
+          type: Type.OBJECT,
+          properties: {
+            niche: { type: Type.STRING },
+            accountNameIdea: { type: Type.STRING },
+            contentStyle: { type: Type.STRING },
+            audioUtilization: { type: Type.STRING }
+          },
+          required: ['niche', 'accountNameIdea', 'contentStyle', 'audioUtilization']
+        }
+      },
+      contentIdStrategy: { type: Type.STRING }
+    },
+    required: ['nicheAccounts', 'contentIdStrategy']
+  };
+
   const response = await ai.models.generateContent({
     model: APP_MODEL_CONFIG[AppID.VIRAL_PLAN_AI],
     contents: prompt,
     config: {
       systemInstruction: systemInstruction,
       responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          nicheAccounts: {
-            type: Type.ARRAY,
-            items: {
-              type: Type.OBJECT,
-              properties: {
-                niche: { type: Type.STRING },
-                accountNameIdea: { type: Type.STRING },
-                contentStyle: { type: Type.STRING },
-                audioUtilization: { type: Type.STRING }
-              },
-              required: ['niche', 'accountNameIdea', 'contentStyle', 'audioUtilization']
-            }
-          },
-          contentIdStrategy: { type: Type.STRING }
-        },
-        required: ['nicheAccounts', 'contentIdStrategy']
-      }
+      responseSchema
     }
   });
 
-  const aiResult = JSON.parse(response.text || '{}');
+  const aiResult = await normalizeAiJson<{ nicheAccounts: ViralPlan['nicheAccounts']; contentIdStrategy: string }>(
+    response.text || '',
+    responseSchema
+  );
 
   // Hard-coded Strategy Template (Deterministic)
   const quarterlyRoadmap = [

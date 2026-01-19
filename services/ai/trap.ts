@@ -1,5 +1,5 @@
 import { Type } from "@google/genai";
-import { generateOptimizedContent } from "./core";
+import { generateOptimizedContent, normalizeAiJson } from "./core";
 import { AppID } from "../../types";
 
 const TRAP_LEXICON = {
@@ -68,20 +68,22 @@ export const generateTrapBar = async (
   Response must be JSON with a "bar" string.`;
 
   try {
+    const responseSchema = {
+      type: Type.OBJECT,
+      properties: { bar: { type: Type.STRING } }
+    };
+
     const response = await generateOptimizedContent(
       AppID.TRAP_AI,
       `Spit a ${vibe} bar. Reference: ${brand}. Topic: ${topic}.`,
       {
         systemInstruction,
         responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: { bar: { type: Type.STRING } }
-        }
+        responseSchema
       }
     );
     
-    const parsed = JSON.parse(response.text || '{}');
+    const parsed = await normalizeAiJson<{ bar: string }>(response.text || '', responseSchema);
     return parsed.bar || "Motion silent, Maybach tinted, I'm already gone.";
   } catch (error) {
     console.error("TrapAI Algorithmic Error:", error);
