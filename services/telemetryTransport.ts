@@ -52,8 +52,21 @@ const scheduleFlush = () => {
   }, FLUSH_INTERVAL_MS);
 };
 
+const getCachedAuthToken = () => {
+  const user = auth.currentUser as
+    | (typeof auth.currentUser & { stsTokenManager?: { accessToken?: string } })
+    | null;
+  const cachedToken = user?.stsTokenManager?.accessToken ?? null;
+  if (cachedToken) {
+    lastAuthToken = cachedToken;
+  }
+  return cachedToken;
+};
+
 const getAuthToken = async (): Promise<string | null> => {
   if (lastAuthToken) return lastAuthToken;
+  const cachedToken = getCachedAuthToken();
+  if (cachedToken) return cachedToken;
   if (tokenRequest) return tokenRequest;
   const user = auth.currentUser;
   if (!user) return null;
@@ -117,6 +130,9 @@ const flush = async () => {
 const flushSync = () => {
   if (queue.length === 0) return;
   if (!lastAuthToken) {
+    getCachedAuthToken();
+  }
+  if (!lastAuthToken) {
     persistQueue();
     return;
   }
@@ -160,6 +176,9 @@ if (typeof window !== 'undefined') {
 }
 
 export function logEvent(event: TelemetryEvent): void {
+  if (!lastAuthToken) {
+    getCachedAuthToken();
+  }
   if (!lastAuthToken) {
     void getAuthToken();
   }
