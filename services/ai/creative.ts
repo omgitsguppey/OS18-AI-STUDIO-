@@ -78,6 +78,30 @@ export const analyzeLyrics = async (songTitle: string, lyrics: string): Promise<
     ]
   };
 
+  const normalizeSchema = {
+    type: 'object',
+    properties: {
+      songTitle: { type: 'string' },
+      metaphoricDensity: { type: 'number' },
+      emotionalResonance: { type: 'number' },
+      linguisticSignature: { type: 'string' },
+      detailedBreakdown: {
+        type: 'object',
+        properties: {
+          vocabulary: { type: 'string' },
+          metaphors: { type: 'string' },
+          emotion: { type: 'string' },
+          structure: { type: 'string' },
+          rhythm: { type: 'string' }
+        }
+      },
+      keyMetaphors: {
+        type: 'array',
+        items: { type: 'string' }
+      }
+    }
+  } as const;
+
   const response = await generateOptimizedContent(
     AppID.LYRICS_AI,
     prompt,
@@ -87,7 +111,7 @@ export const analyzeLyrics = async (songTitle: string, lyrics: string): Promise<
     }
   );
 
-  const aiResult = await normalizeAiJson<LyricAnalysis>(response.text || '', responseSchema);
+  const aiResult = await normalizeAiJson<LyricAnalysis>(response.text || '', normalizeSchema);
   
   // 3. Merge Local Stats with AI Result
   return { 
@@ -123,6 +147,17 @@ export const generateArtistProfile = async (artistName: string, songs: LyricAnal
     required: ['coreThemes', 'vocabularyEvolution', 'emotionalArc', 'signatureStyle', 'suggestedCreativeDirection']
   };
 
+  const normalizeSchema = {
+    type: 'object',
+    properties: {
+      coreThemes: { type: 'array', items: { type: 'string' } },
+      vocabularyEvolution: { type: 'string' },
+      emotionalArc: { type: 'string' },
+      signatureStyle: { type: 'string' },
+      suggestedCreativeDirection: { type: 'string' }
+    }
+  } as const;
+
   const response = await generateOptimizedContent(
     AppID.LYRICS_AI,
     prompt,
@@ -132,7 +167,7 @@ export const generateArtistProfile = async (artistName: string, songs: LyricAnal
     }
   );
 
-  return normalizeAiJson<ArtistProfileAnalysis>(response.text || '', responseSchema);
+  return normalizeAiJson<ArtistProfileAnalysis>(response.text || '', normalizeSchema);
 };
 
 // --- CONTENT AI ---
@@ -196,6 +231,20 @@ export const generateContentEpisode = async (
     required: ['title', 'format', 'platform', 'pov', 'hook', 'script', 'arcNotes']
   };
 
+  const normalizeSchema = {
+    type: 'object',
+    properties: {
+      title: { type: 'string' },
+      format: { type: 'string', enum: ['Short Form', 'Mid Form', 'Long Form'] },
+      platform: { type: 'string', enum: ['YouTube', 'TikTok', 'Instagram'] },
+      pov: { type: 'string', enum: ['First Person', 'Second Person', 'Third Person'] },
+      hook: { type: 'string' },
+      script: { type: 'string' },
+      arcNotes: { type: 'string' },
+      episodeNumber: { type: 'integer' }
+    }
+  } as const;
+
   const response = await generateOptimizedContent(
     AppID.CONTENT_AI,
     prompt,
@@ -208,7 +257,7 @@ export const generateContentEpisode = async (
 
   return normalizeAiJson<Omit<ContentEpisode, 'id' | 'createdAt' | 'seasonId'>>(
     response.text || '',
-    responseSchema
+    normalizeSchema
   );
 };
 
@@ -224,6 +273,13 @@ export const generateSeasonTitle = async (episodes: ContentEpisode[]): Promise<s
     }
   };
 
+  const normalizeSchema = {
+    type: 'object',
+    properties: {
+      seasonTitle: { type: 'string' }
+    }
+  } as const;
+
   const response = await generateOptimizedContent(
     AppID.CONTENT_AI,
     prompt,
@@ -233,7 +289,7 @@ export const generateSeasonTitle = async (episodes: ContentEpisode[]): Promise<s
     }
   );
 
-  const result = await normalizeAiJson<{ seasonTitle: string }>(response.text || '', responseSchema);
+  const result = await normalizeAiJson<{ seasonTitle: string }>(response.text || '', normalizeSchema);
   return result.seasonTitle || "New Season";
 };
 
