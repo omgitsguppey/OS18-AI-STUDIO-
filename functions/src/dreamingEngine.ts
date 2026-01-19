@@ -25,7 +25,7 @@ export interface InteractionEvent {
           "download" | "dwell" | "abandon" | "success" | "dislike" |
           "completion" | "error" | "sys_event" | "install_app" | "open_app";
   timestamp: number;
-  metadata?: any; // eslint-disable-line @typescript-eslint/no-explicit-any
+  metadata?: unknown;
   score?: number;
 }
 
@@ -69,6 +69,9 @@ const SCORES = {
   INSTALL: 15,
 };
 
+const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
 /**
  * The Dreaming Engine: Server-side heuristic analysis and memory consolidation.
  */
@@ -109,6 +112,7 @@ export class DreamingEngine {
 
       this.analyzePatterns(scoredEvents, state);
       this.consolidateMemories(scoredEvents, state);
+      this.updateAggregateMetrics(scoredEvents, state);
 
       t.set(systemMemRef, state, {merge: true});
     });
@@ -123,18 +127,25 @@ export class DreamingEngine {
    */
   private calculateScore(event: InteractionEvent): number {
     let score = 0;
-    const {action, metadata} = event;
+    const {action} = event;
+    const metadata = isPlainObject(event.metadata) ? event.metadata : null;
 
     if (action === "regenerate") {
       score = SCORES.REGENERATE_SLOW;
     }
     if (action === "dwell") {
-      score = (metadata?.duration || 0) > 5 ?
+      const duration = metadata && typeof metadata.duration === "number" ?
+        metadata.duration : 0;
+      score = duration > 5 ?
         SCORES.DWELL_LONG : SCORES.DWELL_SHORT;
     }
-    if (action === "edit" && metadata?.original && metadata?.final) {
-      if (Math.abs(metadata.original.length - metadata.final.length) < 20) {
-        score = SCORES.EDIT;
+    if (action === "edit" && metadata) {
+      const original = metadata.original;
+      const final = metadata.final;
+      if (typeof original === "string" && typeof final === "string") {
+        if (Math.abs(original.length - final.length) < 20) {
+          score = SCORES.EDIT;
+        }
       }
     }
 
@@ -207,6 +218,37 @@ export class DreamingEngine {
       if (appCounts[topApp] > 5) {
         this.addFact(state,
           `Frequent user of ${topApp}`, "Global", 0.8, "dwell");
+      }
+    }
+  }
+
+  /**
+   * Aggregates usage metrics from validated completion events.
+   * @param {InteractionEvent[]} events - Events to analyze.
+   * @param {SystemState} state - State to update.
+   */
+  private updateAggregateMetrics(events: InteractionEvent[], state: SystemState) {
+    for (const event of events) {
+      if (event.action !== "completion") continue;
+      const metadata = isPlainObject(event.metadata) ? event.metadata : null;
+      if (!metadata) continue;
+
+      const inputLength = metadata.inputLength;
+      const outputLength = metadata.outputLength;
+
+      if (typeof inputLength === "number" && Number.isFinite(inputLength)) {
+        state.totalInputChars += inputLength;
+      }
+
+      if (typeof outputLength === "number" && Number.isFinite(outputLength)) {
+        state.totalOutputChars += outputLength;
+      }
+
+      if (typeof event.timestamp === "number" && Number.isFinite(event.timestamp)) {
+        state.lastGenerationTimestamp = Math.max(
+          state.lastGenerationTimestamp,
+          event.timestamp
+        );
       }
     }
   }
