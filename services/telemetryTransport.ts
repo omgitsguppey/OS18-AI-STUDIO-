@@ -102,6 +102,10 @@ const flush = async () => {
 
 const flushSync = () => {
   if (queue.length === 0) return;
+  if (!lastAuthToken) {
+    persistQueue();
+    return;
+  }
   const payloadEvents = queue.slice(0, BATCH_LIMIT);
   queue = queue.slice(payloadEvents.length);
   persistQueue();
@@ -130,6 +134,9 @@ if (typeof window !== 'undefined') {
 }
 
 export function logEvent(event: TelemetryEvent): void {
+  if (!lastAuthToken) {
+    void getAuthToken();
+  }
   queue.push(event);
   if (queue.length > MAX_QUEUE_SIZE) {
     queue = queue.slice(-MAX_QUEUE_SIZE);
