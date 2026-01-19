@@ -1,6 +1,6 @@
 
 import { Type } from "@google/genai";
-import { getAIClient, APP_MODEL_CONFIG } from "./core";
+import { getAIClient, APP_MODEL_CONFIG, normalizeAiJson } from "./core";
 import { AppID } from "../../types";
 
 export interface NSFWConsultation {
@@ -40,23 +40,25 @@ export const generateNSFWConsultation = async (niche: string): Promise<NSFWConsu
   Tone: Professional, direct, understanding of the industry nuance.
   `;
 
+  const responseSchema = {
+    type: Type.OBJECT,
+    properties: {
+      questions: { type: Type.ARRAY, items: { type: Type.STRING } }
+    },
+    required: ['questions']
+  };
+
   const response = await ai.models.generateContent({
     model: APP_MODEL_CONFIG[AppID.NSFW_AI],
     contents: `Niche Concept: "${niche}". Generate consultation questions.`,
     config: {
       systemInstruction,
       responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          questions: { type: Type.ARRAY, items: { type: Type.STRING } }
-        },
-        required: ['questions']
-      }
+      responseSchema
     }
   });
 
-  return JSON.parse(response.text || '{"questions": []}');
+  return normalizeAiJson<NSFWConsultation>(response.text || '', responseSchema);
 };
 
 export const generateNSFWStrategy = async (niche: string, answers: string[]): Promise<NSFWStrategy> => {
@@ -81,51 +83,53 @@ export const generateNSFWStrategy = async (niche: string, answers: string[]): Pr
   
   Generate the Strategy.`;
 
+  const responseSchema = {
+    type: Type.OBJECT,
+    properties: {
+      persona: {
+        type: Type.OBJECT,
+        properties: {
+          archetype: { type: Type.STRING },
+          hook: { type: Type.STRING },
+          sirenCall: { type: Type.STRING, description: "A seductive brand tagline" },
+          bio: { type: Type.STRING }
+        },
+        required: ['archetype', 'hook', 'sirenCall', 'bio']
+      },
+      tosGuide: {
+        type: Type.OBJECT,
+        properties: {
+          safeForSocials: { type: Type.ARRAY, items: { type: Type.STRING } },
+          premiumOnly: { type: Type.ARRAY, items: { type: Type.STRING } }
+        },
+        required: ['safeForSocials', 'premiumOnly']
+      },
+      revenuePlan: {
+        type: Type.ARRAY,
+        items: {
+          type: Type.OBJECT,
+          properties: {
+            day: { type: Type.STRING },
+            theme: { type: Type.STRING },
+            action: { type: Type.STRING },
+            psychology: { type: Type.STRING }
+          },
+          required: ['day', 'theme', 'action', 'psychology']
+        }
+      }
+    },
+    required: ['persona', 'tosGuide', 'revenuePlan']
+  };
+
   const response = await ai.models.generateContent({
     model: APP_MODEL_CONFIG[AppID.NSFW_AI],
     contents: prompt,
     config: {
       systemInstruction,
       responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          persona: {
-            type: Type.OBJECT,
-            properties: {
-              archetype: { type: Type.STRING },
-              hook: { type: Type.STRING },
-              sirenCall: { type: Type.STRING, description: "A seductive brand tagline" },
-              bio: { type: Type.STRING }
-            },
-            required: ['archetype', 'hook', 'sirenCall', 'bio']
-          },
-          tosGuide: {
-            type: Type.OBJECT,
-            properties: {
-              safeForSocials: { type: Type.ARRAY, items: { type: Type.STRING } },
-              premiumOnly: { type: Type.ARRAY, items: { type: Type.STRING } }
-            },
-            required: ['safeForSocials', 'premiumOnly']
-          },
-          revenuePlan: {
-            type: Type.ARRAY,
-            items: {
-              type: Type.OBJECT,
-              properties: {
-                day: { type: Type.STRING },
-                theme: { type: Type.STRING },
-                action: { type: Type.STRING },
-                psychology: { type: Type.STRING }
-              },
-              required: ['day', 'theme', 'action', 'psychology']
-            }
-          }
-        },
-        required: ['persona', 'tosGuide', 'revenuePlan']
-      }
+      responseSchema
     }
   });
 
-  return JSON.parse(response.text || '{}');
+  return normalizeAiJson<NSFWStrategy>(response.text || '', responseSchema);
 };

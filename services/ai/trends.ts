@@ -1,6 +1,6 @@
 
 import { Type } from "@google/genai";
-import { getAIClient, APP_MODEL_CONFIG } from "./core";
+import { getAIClient, APP_MODEL_CONFIG, normalizeAiJson } from "./core";
 import { AppID } from "../../types";
 
 export interface TrendItem {
@@ -58,6 +58,20 @@ export const fetchRawTrends = async (): Promise<TrendItem[]> => {
 export const searchGoogleTrends = async (query: string): Promise<TrendItem[]> => {
   const ai = getAIClient();
   
+  const responseSchema = {
+    type: Type.ARRAY,
+    items: {
+      type: Type.OBJECT,
+      properties: {
+        title: { type: Type.STRING },
+        volume: { type: Type.STRING },
+        snippet: { type: Type.STRING },
+        source: { type: Type.STRING }
+      },
+      required: ['title', 'snippet']
+    }
+  };
+
   const response = await ai.models.generateContent({
     model: 'gemini-flash-lite-latest', // Explicitly requested Lite model
     contents: `Find 5 currently trending news items or discussions related to: "${query}". 
@@ -65,23 +79,14 @@ export const searchGoogleTrends = async (query: string): Promise<TrendItem[]> =>
     config: {
       tools: [{ googleSearch: {} }],
       responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.ARRAY,
-        items: {
-          type: Type.OBJECT,
-          properties: {
-            title: { type: Type.STRING },
-            volume: { type: Type.STRING },
-            snippet: { type: Type.STRING },
-            source: { type: Type.STRING }
-          },
-          required: ['title', 'snippet']
-        }
-      }
+      responseSchema
     }
   });
   
-  const items = JSON.parse(response.text || '[]');
+  const items = await normalizeAiJson<Array<{ title: string; volume?: string; snippet?: string; source?: string }>>(
+    response.text || '',
+    responseSchema
+  );
   
   // Augment with grounding data if available (URLs)
   const chunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
@@ -122,6 +127,35 @@ export const analyzeTrendPattern = async (trendTitle: string, context: string): 
   const prompt = `Analyze real-time data for: "${trendTitle}". Context: "${context}".
   Perform a Google Search to find the latest engagement numbers and article volume.`;
 
+  const responseSchema = {
+    type: Type.OBJECT,
+    properties: {
+      viralityScore: { type: Type.NUMBER, description: "0 to 100 based on search density" },
+      sentimentScore: { type: Type.NUMBER, description: "-100 to 100 based on result sentiment" },
+      growthRate: { type: Type.STRING, description: "e.g. +120% (WoW)" },
+      estimatedReach: { type: Type.STRING, description: "e.g. 2.5M" },
+      engagementRatio: { type: Type.STRING, description: "e.g. 5.2%" },
+      lifespanDays: { type: Type.NUMBER, description: "Remaining days of relevance" },
+      platformDistribution: {
+        type: Type.ARRAY,
+        items: {
+          type: Type.OBJECT,
+          properties: {
+            platform: { type: Type.STRING },
+            percentage: { type: Type.NUMBER }
+          },
+          required: ["platform", "percentage"]
+        }
+      },
+      keyKeywords: { type: Type.ARRAY, items: { type: Type.STRING } },
+      summary: { type: Type.STRING, description: "1 sentence data summary based on search results" }
+    },
+    required: [
+      "viralityScore", "sentimentScore", "growthRate", "estimatedReach", 
+      "engagementRatio", "lifespanDays", "platformDistribution", "keyKeywords", "summary"
+    ]
+  };
+
   const response = await ai.models.generateContent({
     model: APP_MODEL_CONFIG[AppID.TRENDS_AI],
     contents: prompt,
@@ -129,39 +163,12 @@ export const analyzeTrendPattern = async (trendTitle: string, context: string): 
       tools: [{ googleSearch: {} }],
       systemInstruction,
       responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          viralityScore: { type: Type.NUMBER, description: "0 to 100 based on search density" },
-          sentimentScore: { type: Type.NUMBER, description: "-100 to 100 based on result sentiment" },
-          growthRate: { type: Type.STRING, description: "e.g. +120% (WoW)" },
-          estimatedReach: { type: Type.STRING, description: "e.g. 2.5M" },
-          engagementRatio: { type: Type.STRING, description: "e.g. 5.2%" },
-          lifespanDays: { type: Type.NUMBER, description: "Remaining days of relevance" },
-          platformDistribution: {
-            type: Type.ARRAY,
-            items: {
-              type: Type.OBJECT,
-              properties: {
-                platform: { type: Type.STRING },
-                percentage: { type: Type.NUMBER }
-              },
-              required: ["platform", "percentage"]
-            }
-          },
-          keyKeywords: { type: Type.ARRAY, items: { type: Type.STRING } },
-          summary: { type: Type.STRING, description: "1 sentence data summary based on search results" }
-        },
-        required: [
-          "viralityScore", "sentimentScore", "growthRate", "estimatedReach", 
-          "engagementRatio", "lifespanDays", "platformDistribution", "keyKeywords", "summary"
-        ]
-      }
+      responseSchema
     }
   });
 
   return {
     trendId: '', // Assigned by caller
-    ...JSON.parse(response.text || '{}')
+    ...(await normalizeAiJson<Omit<TrendAnalysis, 'trendId'>>(response.text || '', responseSchema))
   };
 };

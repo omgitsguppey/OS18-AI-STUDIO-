@@ -1,6 +1,6 @@
 
 import { Type } from "@google/genai";
-import { getAIClient, APP_MODEL_CONFIG } from "./core";
+import { getAIClient, APP_MODEL_CONFIG, normalizeAiJson } from "./core";
 import { AppID } from "../../types";
 
 export interface PriorityTask {
@@ -31,33 +31,35 @@ export const breakdownTask = async (input: string): Promise<Omit<PriorityPlan, '
   4. Max 6 tasks.
   `;
 
+  const responseSchema = {
+    type: Type.OBJECT,
+    properties: {
+      title: { type: Type.STRING, description: "A simple 3-word title for this session" },
+      tasks: { 
+        type: Type.ARRAY, 
+        items: { 
+          type: Type.OBJECT,
+          properties: {
+            text: { type: Type.STRING },
+            completed: { type: Type.BOOLEAN }
+          },
+          required: ['text', 'completed']
+        } 
+      },
+      motivation: { type: Type.STRING }
+    },
+    required: ['title', 'tasks', 'motivation']
+  };
+
   const response = await ai.models.generateContent({
     model: APP_MODEL_CONFIG[AppID.PRIORITY_AI],
     contents: `Overwhelmed by: "${input}"`,
     config: {
       systemInstruction: systemInstruction,
       responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          title: { type: Type.STRING, description: "A simple 3-word title for this session" },
-          tasks: { 
-            type: Type.ARRAY, 
-            items: { 
-              type: Type.OBJECT,
-              properties: {
-                text: { type: Type.STRING },
-                completed: { type: Type.BOOLEAN }
-              },
-              required: ['text', 'completed']
-            } 
-          },
-          motivation: { type: Type.STRING }
-        },
-        required: ['title', 'tasks', 'motivation']
-      }
+      responseSchema
     }
   });
 
-  return JSON.parse(response.text || '{}');
+  return normalizeAiJson<Omit<PriorityPlan, 'id' | 'createdAt'>>(response.text || '', responseSchema);
 };
