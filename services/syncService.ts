@@ -1,6 +1,7 @@
 import { doc, getDoc } from "firebase/firestore";
 import type { SystemState } from "./systemCore";
 import { auth, db } from "./firebaseConfig";
+import { asArray } from "./utils/normalize";
 
 const LOCAL_STATE_KEY = "core_state_v3";
 const REFRESH_INTERVAL_MS = 60_000;
@@ -9,12 +10,33 @@ let cachedState: SystemState | null = null;
 let refreshTimer: ReturnType<typeof setInterval> | null = null;
 let hasStarted = false;
 
+/**
+ * Normalize ALL async state here.
+ * React should NEVER see raw Firestore or localStorage data.
+ */
+function normalizeState(raw: SystemState): SystemState {
+  return {
+    ...raw,
+
+    // 🔒 hard guarantees (these caused your crash)
+    insights: asArray(raw.insights),
+    learnedFacts: asArray(raw.learnedFacts),
+
+    // ⛑️ add more here later if needed
+    // sessions: asArray(raw.sessions),
+    // templates: asArray(raw.templates),
+  };
+}
+
 const loadCachedState = () => {
   if (typeof window === "undefined") return;
+
   const raw = localStorage.getItem(LOCAL_STATE_KEY);
   if (!raw) return;
+
   try {
-    cachedState = JSON.parse(raw) as SystemState;
+    const parsed = JSON.parse(raw) as SystemState;
+    cachedState = normalizeState(parsed);
   } catch (error) {
     console.warn("[SyncService] Failed to parse cached SystemState.", error);
   }
@@ -22,8 +44,10 @@ const loadCachedState = () => {
 
 const saveCachedState = (state: SystemState) => {
   if (typeof window === "undefined") return;
-  cachedState = state;
-  localStorage.setItem(LOCAL_STATE_KEY, JSON.stringify(state));
+
+  const normalized = normalizeState(state);
+  cachedState = normalized;
+  localStorage.setItem(LOCAL_STATE_KEY, JSON.stringify(normalized));
 };
 
 const fetchSystemState = async (): Promise<SystemState | null> => {
@@ -34,7 +58,8 @@ const fetchSystemState = async (): Promise<SystemState | null> => {
   const ref = doc(db, "users", user.uid, "system", "core_memory");
   const snapshot = await getDoc(ref);
   if (!snapshot.exists()) return null;
-  return snapshot.data() as SystemState;
+
+  return normalizeState(snapshot.data() as SystemState);
 };
 
 class SyncService {
@@ -43,6 +68,7 @@ class SyncService {
     hasStarted = true;
 
     loadCachedState();
+
     await this.refresh().catch((error) => {
       console.warn("[SyncService] Initial sync failed.", error);
     });
@@ -55,11 +81,14 @@ class SyncService {
   async refresh() {
     const latest = await fetchSystemState();
     if (!latest) return;
+
     saveCachedState(latest);
   }
 
   getState(): SystemState | null {
     if (!cachedState) return null;
+
+    // defensive clone so callers can’t mutate core memory
     return JSON.parse(JSON.stringify(cachedState)) as SystemState;
   }
 }
