@@ -5,6 +5,90 @@ if (!admin.apps.length) {
   admin.initializeApp();
 }
 
+const MAX_PAYLOAD_BYTES = 64 * 1024;
+const MAX_EVENTS = 50;
+const ALLOWED_ACTIONS = new Set([
+  "open",
+  "generate",
+  "regenerate",
+  "edit",
+  "copy",
+  "download",
+  "dwell",
+  "abandon",
+  "success",
+  "dislike",
+  "completion",
+  "error",
+  "sys_event",
+  "install_app",
+  "open_app",
+]);
+
+type TelemetryEvent = {
+  appId: string;
+  action: string;
+  timestamp: number;
+  metadata?: Record<string, unknown> | null;
+  score?: number;
+};
+
+const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+const parsePayload = (payload: unknown): Record<string, unknown> | null => {
+  if (typeof payload === "string") {
+    try {
+      const parsed = JSON.parse(payload);
+      return isPlainObject(parsed) ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+  return isPlainObject(payload) ? payload : null;
+};
+
+const normalizeEvents = (events: unknown): TelemetryEvent[] | null => {
+  if (!Array.isArray(events) || events.length === 0 || events.length > MAX_EVENTS) {
+    return null;
+  }
+
+  const normalized: TelemetryEvent[] = [];
+  for (const entry of events) {
+    if (!isPlainObject(entry)) return null;
+    const appId = entry.appId;
+    const action = entry.action;
+    const timestamp = entry.timestamp;
+    const metadata = entry.metadata;
+    const score = entry.score;
+
+    if (typeof appId !== "string" || appId.length === 0) return null;
+    if (typeof action !== "string" || !ALLOWED_ACTIONS.has(action)) return null;
+    if (typeof timestamp !== "number" || !Number.isFinite(timestamp)) return null;
+    if (metadata !== undefined && metadata !== null && !isPlainObject(metadata)) return null;
+    if (score !== undefined && (typeof score !== "number" || !Number.isFinite(score))) {
+      return null;
+    }
+
+    normalized.push({
+      appId,
+      action,
+      timestamp,
+      metadata: metadata ?? null,
+      score: typeof score === "number" ? score : undefined,
+    });
+  }
+
+  return normalized;
+};
+
+const extractBearerToken = (headerValue: string | undefined): string | null => {
+  if (!headerValue) return null;
+  const [scheme, token] = headerValue.split(" ");
+  if (scheme !== "Bearer" || !token) return null;
+  return token;
+};
+
 /**
  * INGEST HANDLER (The Valve)
  * Accepts raw telemetry events and pushes them to the processing queue.
@@ -17,20 +101,53 @@ export const ingest = onRequest(
       return;
     }
 
-    const payload = req.body;
-    // Support text/plain parsing if needed
-    const data = typeof payload === "string" ? JSON.parse(payload) : payload;
-    const {events, userId} = data;
+    const rawBodyLength = req.rawBody
+      ? req.rawBody.length
+      : Buffer.byteLength(
+        typeof req.body === "string"
+          ? req.body
+          : JSON.stringify(req.body ?? "")
+      );
+    if (rawBodyLength > MAX_PAYLOAD_BYTES) {
+      res.status(413).send("Payload Too Large");
+      return;
+    }
 
-    if (!events || !Array.isArray(events)) {
+    const token = extractBearerToken(req.headers.authorization);
+    if (!token) {
+      res.status(401).send("Unauthorized");
+      return;
+    }
+
+    let decodedUserId: string | null = null;
+    try {
+      const decoded = await admin.auth().verifyIdToken(token);
+      decodedUserId = decoded.uid || null;
+    } catch (error) {
+      console.warn("Telemetry auth verification failed", error);
+    }
+
+    if (!decodedUserId) {
+      res.status(401).send("Unauthorized");
+      return;
+    }
+
+    const payload = parsePayload(req.body);
+    if (!payload) {
+      res.status(400).send("Invalid Payload");
+      return;
+    }
+
+    const events = normalizeEvents(payload.events);
+    if (!events) {
       res.status(400).send("Invalid Payload: 'events' array required.");
       return;
     }
 
     try {
       await admin.firestore().collection("telemetry_queue").add({
-        userId: userId || "anonymous",
-        events: events,
+        userId: decodedUserId,
+        events,
         ip: req.ip,
         userAgent: req.get("User-Agent"),
         clientTimestamp: Date.now(),
