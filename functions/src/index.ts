@@ -4,10 +4,7 @@ import {setGlobalOptions} from "firebase-functions/v2";
 
 import {ingest} from "./ingest";
 import {DreamingEngine} from "./dreamingEngine";
-import {
-  incrementStoreCounter,
-  decrementStoreCounter,
-} from "./storeCounters";
+import {updateAppStorageStats} from "./stats";
 
 if (!admin.apps.length) {
   admin.initializeApp();
@@ -54,4 +51,4 @@ export const processTelemetryQueue = functions.firestore.onDocumentCreated(
   }
 );
 
-export {incrementStoreCounter, decrementStoreCounter};
+export {updateAppStorageStats};

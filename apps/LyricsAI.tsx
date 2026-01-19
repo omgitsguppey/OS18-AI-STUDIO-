@@ -23,6 +23,7 @@ import {
 import { analyzeLyrics, generateArtistProfile, LyricAnalysis, ArtistProfileAnalysis } from '../services/geminiService';
 import { storage, STORES } from '../services/storageService';
 import { systemCore } from '../services/systemCore';
+import { AppID } from '../types';
 
 interface Artist {
   id: string;
@@ -152,11 +153,13 @@ const LyricsAI: React.FC = () => {
   }, [selectedArtist]);
 
   const handleCreateArtist = () => {
-    if (!newArtistName.trim()) return;
+    const trimmedName = newArtistName.trim();
+    const trimmedGenre = newArtistGenre.trim();
+    if (!trimmedName) return;
     const artist: Artist = {
       id: Date.now().toString(),
-      name: newArtistName,
-      genre: newArtistGenre || 'General',
+      name: trimmedName,
+      genre: trimmedGenre || 'General',
       songs: [],
       createdAt: Date.now()
     };
@@ -173,7 +176,9 @@ const LyricsAI: React.FC = () => {
   };
 
   const handleAddSong = async () => {
-    if (!newSongTitle.trim() || !newSongLyrics.trim() || !selectedArtistId) return;
+    const trimmedTitle = newSongTitle.trim();
+    const trimmedLyrics = newSongLyrics.trim();
+    if (!trimmedTitle || !trimmedLyrics || !selectedArtistId) return;
     
     // --- CREDIT CHECK (Cost: 1) ---
     if (credits < 1) {
@@ -188,7 +193,7 @@ const LyricsAI: React.FC = () => {
       setCredits(systemCore.getCredits());
       
       // Analyze
-      const analysis = await analyzeLyrics(newSongTitle, newSongLyrics);
+      const analysis = await analyzeLyrics(trimmedTitle, trimmedLyrics);
       
       setArtists(prev => prev.map(a => 
         a.id === selectedArtistId 
@@ -201,7 +206,7 @@ const LyricsAI: React.FC = () => {
         context: 'generation',
         eventType: 'generate',
         label: 'song_analysis',
-        meta: { inputLength: lyrics.length }
+        meta: { inputLength: trimmedLyrics.length }
       });
 
       setNewSongTitle('');
@@ -220,6 +225,13 @@ const LyricsAI: React.FC = () => {
 
   const handleGenerateProfile = async () => {
     if (!selectedArtist || selectedArtist.songs.length === 0) return;
+    const totalLyricsLength = selectedArtist.songs.reduce((sum, song) => {
+      const lyrics = song.originalLyrics;
+      if (typeof lyrics === 'string') {
+        return sum + lyrics.length;
+      }
+      return sum;
+    }, 0);
     
     // --- CREDIT CHECK (Cost: 3) ---
     if (credits < 3) {
@@ -242,7 +254,7 @@ const LyricsAI: React.FC = () => {
           context: 'generation',
           eventType: 'generate',
           label: 'artist_profile',
-          meta: { inputLength: artistName.length }
+          meta: { inputLength: totalLyricsLength }
         });
     } catch (e) {
         console.error("Profile Gen Error", e);
