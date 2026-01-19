@@ -7,6 +7,7 @@ import { Wifi, Battery, Search, Loader2 } from 'lucide-react';
 import { systemCore } from './services/systemCore';
 import { storage, STORES } from './services/storageService';
 import { authService } from './services/authService';
+import { syncService } from './services/syncService';
 import { User } from 'firebase/auth';
 
 // --- LAZY LOADED APPS ---
@@ -154,6 +155,7 @@ const App: React.FC = () => {
   useEffect(() => {
     if (!user) return; 
 
+    syncService.init().catch(console.error);
     systemCore.init().catch(console.error);
     
     const handleGlobalClick = (e: MouseEvent) => {
