@@ -278,12 +278,12 @@ export const ingest = onRequest(
       return;
     }
 
-    const rawBodyLength = req.rawBody
-      ? req.rawBody.length
-      : Buffer.byteLength(
-        typeof req.body === "string"
-          ? req.body
-          : JSON.stringify(req.body ?? "")
+    const rawBodyLength = req.rawBody ?
+      req.rawBody.length :
+      Buffer.byteLength(
+        typeof req.body === "string" ?
+          req.body :
+          JSON.stringify(req.body ?? "")
       );
     if (rawBodyLength > MAX_PAYLOAD_BYTES) {
       res.status(413).send("Payload Too Large");

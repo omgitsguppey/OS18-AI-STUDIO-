@@ -4,7 +4,10 @@ import {setGlobalOptions} from "firebase-functions/v2";
 
 import {ingest} from "./ingest";
 import {DreamingEngine} from "./dreamingEngine";
-import {updateAppStorageStats} from "./stats";
+import {
+  incrementStoreCounter,
+  decrementStoreCounter,
+} from "./storeCounters";
 
 if (!admin.apps.length) {
   admin.initializeApp();
@@ -17,7 +20,7 @@ export const telemeteryIngest = ingest;
 
 // 2. Export the Background Processor (The "Brain")
 export const processTelemetryQueue = functions.firestore.onDocumentCreated(
-  "telemetry_sessions/{userId}/sessions/{sessionId}/batches/{docId}",
+  "telemetry_queue/{docId}",
   async (event) => {
     const snapshot = event.data;
     if (!snapshot) return;
@@ -51,4 +54,4 @@ export const processTelemetryQueue = functions.firestore.onDocumentCreated(
   }
 );
 
-export {updateAppStorageStats};
+export {incrementStoreCounter, decrementStoreCounter};
