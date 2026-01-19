@@ -1,7 +1,6 @@
 import { storage, STORES } from './storageService';
 import { logEvent } from './telemetryTransport';
-import { authService } from './authService'; // Added for Admin check
-import { auth } from './firebaseConfig';     // Added to access current user
+import { asArray } from './utils/normalize';
 
 /**
  * SYSTEM INTELLIGENCE LAYER (v3.0 - Phase 1: Dumb Collector)
@@ -59,7 +58,7 @@ export interface SystemState {
   };
 }
 
-const DEFAULT_STATE: SystemState = {
+export const DEFAULT_STATE: SystemState = {
   userArchetype: 'General User',
   activePromptVariant: 'A', // Default to A, server assigns variants now
   learnedFacts: [],
@@ -81,14 +80,62 @@ const DEFAULT_STATE: SystemState = {
 
 const LOCAL_STATE_KEY = 'core_state_v3';
 
+const isRecord = (value: unknown): value is Record<string, unknown> => (
+  typeof value === 'object' && value !== null && !Array.isArray(value)
+);
+
+const asBoolean = (value: unknown, fallback: boolean) => (
+  typeof value === 'boolean' ? value : fallback
+);
+
+const asNumber = (value: unknown, fallback: number) => (
+  typeof value === 'number' && Number.isFinite(value) ? value : fallback
+);
+
+const asString = (value: unknown, fallback: string) => (
+  typeof value === 'string' ? value : fallback
+);
+
+const asRecord = <T extends Record<string, unknown>>(value: unknown, fallback: T): T => (
+  isRecord(value) ? value as T : fallback
+);
+
+export const normalizeSystemState = (raw: Partial<SystemState> | null | undefined): SystemState => {
+  const base = isRecord(raw) ? raw : {};
+  const credits = isRecord(base.credits) ? base.credits : {};
+
+  return {
+    ...DEFAULT_STATE,
+    ...base,
+    userArchetype: asString(base.userArchetype, DEFAULT_STATE.userArchetype),
+    activePromptVariant: base.activePromptVariant === 'A' || base.activePromptVariant === 'B'
+      ? base.activePromptVariant
+      : DEFAULT_STATE.activePromptVariant,
+    learnedFacts: asArray(base.learnedFacts),
+    insights: asArray(base.insights),
+    telemetryEnabled: asBoolean(base.telemetryEnabled, DEFAULT_STATE.telemetryEnabled),
+    keywordWeights: asRecord(base.keywordWeights, DEFAULT_STATE.keywordWeights),
+    negativeConstraints: asRecord(base.negativeConstraints, DEFAULT_STATE.negativeConstraints),
+    goldenTemplates: asRecord(base.goldenTemplates, DEFAULT_STATE.goldenTemplates),
+    sessionScore: asNumber(base.sessionScore, DEFAULT_STATE.sessionScore),
+    lastGenerationTimestamp: asNumber(base.lastGenerationTimestamp, DEFAULT_STATE.lastGenerationTimestamp),
+    totalInputChars: asNumber(base.totalInputChars, DEFAULT_STATE.totalInputChars),
+    totalOutputChars: asNumber(base.totalOutputChars, DEFAULT_STATE.totalOutputChars),
+    requestCount: asNumber(base.requestCount, DEFAULT_STATE.requestCount),
+    credits: {
+      count: asNumber(credits.count, DEFAULT_STATE.credits.count),
+      lastReset: asString(credits.lastReset, DEFAULT_STATE.credits.lastReset)
+    }
+  };
+};
+
 const readLocalStateSnapshot = (): SystemState => {
   if (typeof window === 'undefined') return DEFAULT_STATE;
-  // TODO: Replace localStorage snapshot with server-synced state when available.
   const raw = localStorage.getItem(LOCAL_STATE_KEY);
   if (!raw) return DEFAULT_STATE;
   try {
     const parsed = JSON.parse(raw) as Partial<SystemState>;
-    return { ...DEFAULT_STATE, ...parsed };
+    return normalizeSystemState(parsed);
   } catch (error) {
     console.warn('[SystemCore] Failed to parse local state snapshot.', error);
     return DEFAULT_STATE;
@@ -97,12 +144,12 @@ const readLocalStateSnapshot = (): SystemState => {
 
 const writeLocalStateSnapshot = (state: SystemState) => {
   if (typeof window === 'undefined') return;
-  localStorage.setItem(LOCAL_STATE_KEY, JSON.stringify(state));
+  const normalized = normalizeSystemState(state);
+  localStorage.setItem(LOCAL_STATE_KEY, JSON.stringify(normalized));
 };
 
 class SystemCoreService {
   async init() {
-    // TODO: Wire server-synced state into a local snapshot when SyncService is ready.
     return;
   }
 
@@ -140,16 +187,11 @@ class SystemCoreService {
   // --- 2. CREDIT SYSTEM ---
   
   getCredits(): number {
-      // Admin Bypass: Show effectively unlimited credits
-      if (authService.isAdmin(auth.currentUser)) return 999;
       const state = readLocalStateSnapshot();
       return state.credits.count;
   }
 
   async useCredit(amount = 1): Promise<boolean> {
-      // Admin Bypass: Never face credit restrictions
-      if (authService.isAdmin(auth.currentUser)) return true;
-
       const state = readLocalStateSnapshot();
       if (state.credits.count < amount) return false;
       writeLocalStateSnapshot({
@@ -204,8 +246,7 @@ class SystemCoreService {
 
   async updateStateFromSync(newState: Partial<SystemState>) {
       const state = readLocalStateSnapshot();
-      writeLocalStateSnapshot({ ...state, ...newState });
-      // TODO: Replace local snapshot updates with server-synced state wiring.
+      writeLocalStateSnapshot(normalizeSystemState({ ...state, ...newState }));
   }
 
   // --- PUBLIC API FOR SETTINGS APP ---

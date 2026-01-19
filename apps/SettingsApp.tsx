@@ -174,7 +174,7 @@ const Header = memo(({ title, canGoBack, onBack }: { title: string, canGoBack: b
 
 // --- SUB-VIEWS ---
 
-const MainView = ({ user, isAdmin, sysMetrics, pushView }: any) => (
+const MainView = ({ user, sysMetrics, pushView }: any) => (
     <div className="animate-slide-up pb-10">
       <div className="px-4 pt-6 pb-4">
         <h1 className="text-[34px] font-bold text-black dark:text-white tracking-tight">Settings</h1>
@@ -207,16 +207,14 @@ const MainView = ({ user, isAdmin, sysMetrics, pushView }: any) => (
             value={sysMetrics ? `${sysMetrics.facts} Memories` : 'Active'} 
             isLink 
         />
-        {isAdmin && (
-            <ListItem 
-                icon={Terminal} 
-                color="bg-black border border-white/20" 
-                label="Neural Backend" 
-                onClick={() => pushView('backend')} 
-                value="God Mode"
-                isLink 
-            />
-        )}
+        <ListItem 
+            icon={Terminal} 
+            color="bg-black border border-white/20" 
+            label="Neural Backend" 
+            onClick={() => pushView('backend')} 
+            value="God Mode"
+            isLink 
+        />
       </ListGroup>
 
       <ListGroup>
@@ -476,7 +474,7 @@ const IntelligenceView = memo(({ sysMetrics, aiLatency, testAiLatency, settings,
     </div>
 ));
 
-const ProfileView = memo(({ user, isAdmin, sysMetrics, handleSignOut, formatBytes }: any) => (
+const ProfileView = memo(({ user, sysMetrics, handleSignOut, formatBytes }: any) => (
     <div className="animate-slide-up pb-10">
         <div className="flex flex-col items-center pt-8 pb-6">
             <div className="w-24 h-24 rounded-full bg-gray-200 dark:bg-gray-700 overflow-hidden mb-4 shadow-lg ring-4 ring-white dark:ring-white/10">
@@ -484,7 +482,6 @@ const ProfileView = memo(({ user, isAdmin, sysMetrics, handleSignOut, formatByte
             </div>
             <h2 className="text-2xl font-bold text-black dark:text-white">{user?.displayName || 'User'}</h2>
             <p className="text-gray-500">{user?.email}</p>
-            {isAdmin && <span className="mt-2 px-3 py-1 bg-blue-500/10 text-blue-500 text-xs font-bold rounded-full uppercase tracking-wider">Administrator</span>}
         </div>
         <ListGroup>
             <ListItem label="Name, Phone Numbers, Email" isLink />
@@ -605,7 +602,6 @@ const SettingsApp: React.FC<SettingsAppProps> = ({
   
   // Auth State
   const [user, setUser] = useState<User | null>(auth.currentUser);
-  const isAdmin = user?.email === 'uylusjohnson@gmail.com';
 
   // App Selection State
   const [selectedAppId, setSelectedAppId] = useState<AppID | null>(null);
@@ -658,7 +654,7 @@ const SettingsApp: React.FC<SettingsAppProps> = ({
       setSysMetrics(prev => JSON.stringify(prev) !== JSON.stringify(m) ? m : prev);
       
       // 2. Events (Only for Backend View) - THROTTLED to once per 2s
-      if (currentView === 'backend' && isAdmin) {
+      if (currentView === 'backend') {
           const now = Date.now();
           if (now - logUpdateRef.current > 2000) {
               const events = systemCore.getRecentEvents(50);
@@ -679,7 +675,7 @@ const SettingsApp: React.FC<SettingsAppProps> = ({
     poll(); // Initial call
 
     return () => clearInterval(interval);
-  }, [currentView, isAdmin]);
+  }, [currentView]);
 
   // 4. Update Setting Handler
   const updateSetting = useCallback((key: keyof SettingsState, val: any) => {
@@ -824,9 +820,9 @@ const SettingsApp: React.FC<SettingsAppProps> = ({
       )}
 
       <div className="flex-1 overflow-y-auto custom-scrollbar">
-        {currentView === 'main' && <MainView user={user} isAdmin={isAdmin} sysMetrics={sysMetrics} pushView={pushView} />}
-        {currentView === 'profile' && <ProfileView user={user} isAdmin={isAdmin} sysMetrics={sysMetrics} handleSignOut={handleSignOut} formatBytes={formatBytes} />}
-        {currentView === 'backend' && isAdmin && <BackendView recentEvents={recentEvents} sysMetrics={sysMetrics} handleLobotomy={handleLobotomy} />}
+        {currentView === 'main' && <MainView user={user} sysMetrics={sysMetrics} pushView={pushView} />}
+        {currentView === 'profile' && <ProfileView user={user} sysMetrics={sysMetrics} handleSignOut={handleSignOut} formatBytes={formatBytes} />}
+        {currentView === 'backend' && <BackendView recentEvents={recentEvents} sysMetrics={sysMetrics} handleLobotomy={handleLobotomy} />}
         {currentView === 'gemini' && <IntelligenceView sysMetrics={sysMetrics} aiLatency={aiLatency} testAiLatency={testAiLatency} settings={settings} updateSetting={updateSetting} testPrompt={testPrompt} setTestPrompt={setTestPrompt} testResponse={testResponse} isTestingAi={isTestingAi} isCoolingDown={isCoolingDown} handleTestPrompt={handleTestPrompt} />}
         {currentView === 'general' && <GeneralView pushView={pushView} />}
         {currentView === 'display' && <DisplayView settings={settings} updateSetting={updateSetting} />}

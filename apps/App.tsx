@@ -107,9 +107,6 @@ const App: React.FC = () => {
     const unsubscribe = authService.onUserChange((u) => {
       setUser(u);
       setLoadingAuth(false);
-      if (u && authService.isAdmin(u)) {
-        console.log("Welcome back, Administrator Johnson.");
-      }
     });
     return () => unsubscribe();
   }, []);

@@ -34,6 +34,41 @@ const AnalyticsAI: React.FC = () => {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editForm, setEditForm] = useState<Partial<RevenueRecord>>({});
 
+  const initWorker = () => {
+    try {
+      const worker = new Worker(new URL('./analyticsRevenueWorker.ts', import.meta.url), { type: 'module' });
+      workerRef.current = worker;
+      worker.onmessage = (event) => {
+        const { records, error } = event.data || {};
+        if (error) {
+          console.error(error);
+          alert("Failed to parse file. Please ensure it's a valid music revenue statement.");
+        } else if (records) {
+          const newRecords = records.map((r: Omit<RevenueRecord, 'id'>) => ({
+            ...r,
+            id: Date.now().toString() + Math.random().toString(36).substr(2, 9)
+          }));
+          setData(prev => [...prev, ...newRecords]);
+          alert(`Successfully parsed ${newRecords.length} records.`);
+        }
+        setIsProcessing(false);
+        if (fileInputRef.current) fileInputRef.current.value = '';
+      };
+      worker.onerror = (err) => {
+        console.error(err);
+        alert("Failed to parse file. Please ensure it's a valid music revenue statement.");
+        setIsProcessing(false);
+        if (fileInputRef.current) fileInputRef.current.value = '';
+        workerRef.current = null;
+      };
+      return worker;
+    } catch (error) {
+      console.error('Failed to initialize analytics worker', error);
+      workerRef.current = null;
+      return null;
+    }
+  };
+
   useEffect(() => {
     const init = async () => {
       try {
@@ -50,32 +85,9 @@ const AnalyticsAI: React.FC = () => {
 
   useEffect(() => {
     // Web Worker keeps CSV/PDF parsing off the main thread to preserve UI responsiveness.
-    const worker = new Worker(new URL('./analyticsRevenueWorker.ts', import.meta.url), { type: 'module' });
-    workerRef.current = worker;
-    worker.onmessage = (event) => {
-      const { records, error } = event.data || {};
-      if (error) {
-        console.error(error);
-        alert("Failed to parse file. Please ensure it's a valid music revenue statement.");
-      } else if (records) {
-        const newRecords = records.map((r: Omit<RevenueRecord, 'id'>) => ({
-          ...r,
-          id: Date.now().toString() + Math.random().toString(36).substr(2, 9)
-        }));
-        setData(prev => [...prev, ...newRecords]);
-        alert(`Successfully parsed ${newRecords.length} records.`);
-      }
-      setIsProcessing(false);
-      if (fileInputRef.current) fileInputRef.current.value = '';
-    };
-    worker.onerror = (err) => {
-      console.error(err);
-      alert("Failed to parse file. Please ensure it's a valid music revenue statement.");
-      setIsProcessing(false);
-      if (fileInputRef.current) fileInputRef.current.value = '';
-    };
+    const worker = initWorker();
     return () => {
-      worker.terminate();
+      worker?.terminate();
       workerRef.current = null;
     };
   }, []);
@@ -130,13 +142,13 @@ const AnalyticsAI: React.FC = () => {
     if (!e.target.files || e.target.files.length === 0) return;
     const file = e.target.files[0];
     setIsProcessing(true);
-    if (!workerRef.current) {
-      // TODO: Provide a fallback if worker initialization fails.
+    const worker = workerRef.current ?? initWorker();
+    if (!worker) {
       setIsProcessing(false);
       alert("Failed to parse file. Please ensure it's a valid music revenue statement.");
       return;
     }
-    workerRef.current.postMessage({ file });
+    worker.postMessage({ file });
   };
 
   const handleAddRow = () => {

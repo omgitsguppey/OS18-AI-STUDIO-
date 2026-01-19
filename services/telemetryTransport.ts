@@ -1,8 +1,11 @@
 import type { InteractionEvent } from '../types';
+import { auth } from './firebaseConfig';
 
 const ENDPOINT = '/api/telemetry/ingest';
 const FLUSH_INTERVAL_MS = 10_000;
 const BATCH_LIMIT = 10;
+const MAX_RETRIES = 2;
+const BASE_RETRY_DELAY_MS = 500;
 
 let queue: InteractionEvent[] = [];
 let flushTimer: ReturnType<typeof setTimeout> | null = null;
@@ -15,22 +18,46 @@ const scheduleFlush = () => {
   }, FLUSH_INTERVAL_MS);
 };
 
-const postBatch = (events: InteractionEvent[]) => {
-  if (events.length === 0) return;
+const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const buildHeaders = async (): Promise<Record<string, string>> => {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json'
+  };
+  const user = auth.currentUser;
+  if (!user) return headers;
+
   try {
-    void fetch(ENDPOINT, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-        // TODO: Add auth headers when server-side auth is available.
-      },
-      body: JSON.stringify({ events })
-      // TODO: Add retry/backoff strategy once telemetry SLA is defined.
-    }).catch(() => {
-      // Fail silently to avoid impacting UI.
-    });
+    const token = await user.getIdToken();
+    headers.Authorization = `Bearer ${token}`;
   } catch {
-    // Fail silently to avoid impacting UI.
+    // Skip auth header if token fetch fails.
+  }
+
+  return headers;
+};
+
+const postBatch = async (events: InteractionEvent[]) => {
+  if (events.length === 0) return;
+  const payload = JSON.stringify({ events });
+  const headers = await buildHeaders();
+
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt += 1) {
+    try {
+      const response = await fetch(ENDPOINT, {
+        method: 'POST',
+        headers,
+        body: payload
+      });
+      if (response.ok) return;
+      if (response.status < 500) return;
+    } catch {
+      // Retry on network failures.
+    }
+
+    if (attempt < MAX_RETRIES) {
+      await delay(BASE_RETRY_DELAY_MS * 2 ** attempt);
+    }
   }
 };
 
@@ -38,7 +65,7 @@ const flush = () => {
   if (queue.length === 0) return;
   const payload = queue;
   queue = [];
-  postBatch(payload);
+  void postBatch(payload);
 };
 
 const flushSync = () => {
@@ -51,7 +78,7 @@ const flushSync = () => {
       const blob = new Blob([payload], { type: 'application/json' });
       navigator.sendBeacon(ENDPOINT, blob);
     } else {
-      postBatch(pending);
+      void postBatch(pending);
     }
   } catch {
     // Fail silently to avoid impacting UI.
