@@ -1,5 +1,5 @@
 
-import { GoogleGenAI, GenerateContentResponse } from "@google/genai";
+import { GoogleGenAI, GenerateContentResponse, Type } from "@google/genai";
 import { AppID } from "../../types";
 import { systemCore } from "../systemCore";
 import { getCachedPolicy } from "../systemPolicyService";
@@ -18,6 +18,62 @@ type Schema =
   | { type: 'boolean' }
   | { type: 'object'; properties?: Record<string, Schema> }
   | { type: 'array'; items?: Schema };
+
+type GenAiSchema = {
+  type: Type;
+  properties?: Record<string, GenAiSchema>;
+  items?: GenAiSchema;
+  enum?: string[];
+};
+
+const mapGenAiType = (type: Type): Schema['type'] => {
+  switch (type) {
+    case Type.STRING:
+      return 'string';
+    case Type.NUMBER:
+      return 'number';
+    case Type.INTEGER:
+      return 'integer';
+    case Type.BOOLEAN:
+      return 'boolean';
+    case Type.ARRAY:
+      return 'array';
+    case Type.OBJECT:
+    default:
+      return 'object';
+  }
+};
+
+const coerceSchema = (schema: Schema | GenAiSchema): Schema => {
+  if (typeof schema.type === 'string') {
+    return schema as Schema;
+  }
+  const mappedType = mapGenAiType(schema.type);
+  if (mappedType === 'array') {
+    return {
+      type: 'array',
+      items: schema.items ? coerceSchema(schema.items) : undefined
+    };
+  }
+  if (mappedType === 'object') {
+    const properties = schema.properties
+      ? Object.fromEntries(
+          Object.entries(schema.properties).map(([key, value]) => [key, coerceSchema(value)])
+        )
+      : undefined;
+    return {
+      type: 'object',
+      properties
+    };
+  }
+  if (mappedType === 'string') {
+    return {
+      type: 'string',
+      enum: schema.enum
+    };
+  }
+  return { type: mappedType };
+};
 
 const isPlainObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -60,21 +116,22 @@ const normalizeWithSchema = (value: unknown, schema: Schema): unknown => {
   }
 };
 
-const normalizeLocally = <T>(text: string, schema: Schema): T => {
+const normalizeLocally = <T>(text: string, schema: Schema | GenAiSchema): T => {
   let parsed: unknown = null;
   try {
     parsed = text ? JSON.parse(text) : null;
   } catch {
     parsed = null;
   }
-  return normalizeWithSchema(parsed, schema) as T;
+  return normalizeWithSchema(parsed, coerceSchema(schema)) as T;
 };
 
-export const normalizeAiJson = async <T>(text: string, schema: Schema): Promise<T> => {
+export const normalizeAiJson = async <T>(text: string, schema: Schema | GenAiSchema): Promise<T> => {
   const user = auth.currentUser;
   const token = user ? await user.getIdToken() : null;
+  const normalizedSchema = coerceSchema(schema);
   if (!token) {
-    return normalizeLocally<T>(text, schema);
+    return normalizeLocally<T>(text, normalizedSchema);
   }
 
   try {
@@ -84,15 +141,15 @@ export const normalizeAiJson = async <T>(text: string, schema: Schema): Promise<
         'Content-Type': 'application/json',
         Authorization: `Bearer ${token}`
       },
-      body: JSON.stringify({ text, schema })
+      body: JSON.stringify({ text, schema: normalizedSchema })
     });
     if (!response.ok) {
-      return normalizeLocally<T>(text, schema);
+      return normalizeLocally<T>(text, normalizedSchema);
     }
     const data = await response.json() as { data: T };
     return data.data;
   } catch {
-    return normalizeLocally<T>(text, schema);
+    return normalizeLocally<T>(text, normalizedSchema);
   }
 };
 
