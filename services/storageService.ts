@@ -167,7 +167,7 @@ class StorageService {
     return {
         name: storeName,
         count,
-        sizeBytes: 0 // TODO: Replace with server-provided size metadata to avoid scans.
+        sizeBytes: 0
     };
   }
 

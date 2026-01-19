@@ -1,32 +1,15 @@
 import { doc, getDoc } from "firebase/firestore";
-import type { SystemState } from "./systemCore";
+import { normalizeSystemState, type SystemState } from "./systemCore";
 import { auth, db } from "./firebaseConfig";
-import { asArray } from "./utils/normalize";
 
 const LOCAL_STATE_KEY = "core_state_v3";
 const REFRESH_INTERVAL_MS = 60_000;
+const SYSTEM_STATE_COLLECTION = "system";
+const SYSTEM_STATE_DOC = "core_memory";
 
 let cachedState: SystemState | null = null;
 let refreshTimer: ReturnType<typeof setInterval> | null = null;
 let hasStarted = false;
-
-/**
- * Normalize ALL async state here.
- * React should NEVER see raw Firestore or localStorage data.
- */
-function normalizeState(raw: SystemState): SystemState {
-  return {
-    ...raw,
-
-    // 🔒 hard guarantees (these caused your crash)
-    insights: asArray(raw.insights),
-    learnedFacts: asArray(raw.learnedFacts),
-
-    // ⛑️ add more here later if needed
-    // sessions: asArray(raw.sessions),
-    // templates: asArray(raw.templates),
-  };
-}
 
 const loadCachedState = () => {
   if (typeof window === "undefined") return;
@@ -36,7 +19,7 @@ const loadCachedState = () => {
 
   try {
     const parsed = JSON.parse(raw) as SystemState;
-    cachedState = normalizeState(parsed);
+    cachedState = normalizeSystemState(parsed);
   } catch (error) {
     console.warn("[SyncService] Failed to parse cached SystemState.", error);
   }
@@ -45,7 +28,7 @@ const loadCachedState = () => {
 const saveCachedState = (state: SystemState) => {
   if (typeof window === "undefined") return;
 
-  const normalized = normalizeState(state);
+  const normalized = normalizeSystemState(state);
   cachedState = normalized;
   localStorage.setItem(LOCAL_STATE_KEY, JSON.stringify(normalized));
 };
@@ -54,12 +37,11 @@ const fetchSystemState = async (): Promise<SystemState | null> => {
   const user = auth.currentUser;
   if (!user) return null;
 
-  // TODO: Confirm server-side SystemState document path before shipping.
-  const ref = doc(db, "users", user.uid, "system", "core_memory");
+  const ref = doc(db, "users", user.uid, SYSTEM_STATE_COLLECTION, SYSTEM_STATE_DOC);
   const snapshot = await getDoc(ref);
   if (!snapshot.exists()) return null;
 
-  return normalizeState(snapshot.data() as SystemState);
+  return normalizeSystemState(snapshot.data() as SystemState);
 };
 
 class SyncService {
