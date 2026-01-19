@@ -19,6 +19,7 @@ type Schema =
   | { type: 'object'; properties?: Record<string, Schema> }
   | { type: 'array'; items?: Schema };
 
+// Accept extra GenAI schema metadata, even if normalization ignores it.
 type GenAiSchema = {
   type: Type;
   properties?: Record<string, GenAiSchema>;
