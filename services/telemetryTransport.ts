@@ -1,109 +1,72 @@
-import type { InteractionEvent } from './systemCore';
+import type { InteractionEvent } from '../types';
 
-/**
- * TELEMETRY TRANSPORT LAYER (v1.0)
- * "The Courier"
- * Role: Reliable, non-blocking transmission of events to the backend.
- * Features: Batching, Keep-Alive, and Beacon support for 100% data capture.
- */
+const ENDPOINT = '/api/telemetry/ingest';
+const FLUSH_INTERVAL_MS = 10_000;
+const BATCH_LIMIT = 10;
 
-// UPDATED: Pointing to your live Firebase Cloud Function
-const ENDPOINT = 'https://us-central1-studio-324281196-ee8e6.cloudfunctions.net/telemeteryIngest';
+let queue: InteractionEvent[] = [];
+let flushTimer: ReturnType<typeof setTimeout> | null = null;
 
-const FLUSH_INTERVAL = 5000; // Send batch every 5 seconds
-const BATCH_LIMIT = 10;      // ...or when we have 10 events
+const scheduleFlush = () => {
+  if (flushTimer) return;
+  flushTimer = setTimeout(() => {
+    flushTimer = null;
+    flush();
+  }, FLUSH_INTERVAL_MS);
+};
 
-class TelemetryTransportService {
-  private buffer: InteractionEvent[] = [];
-  private timer: ReturnType<typeof setTimeout> | null = null;
-
-  constructor() {
-    if (typeof window !== 'undefined') {
-      // Ensure data is sent when user closes tab
-      window.addEventListener('beforeunload', () => this.flushSync());
-      
-      // Ensure data is sent when user minimizes/switches tabs (mobile friendly)
-      document.addEventListener('visibilitychange', () => {
-        if (document.visibilityState === 'hidden') {
-          this.flush();
-        }
-      });
-    }
-  }
-
-  /**
-   * Adds an event to the outbound queue.
-   * Logic: Batches events to reduce network requests, but flushes 
-   * immediately if the buffer is full to prevent memory growth.
-   */
-  track(event: InteractionEvent) {
-    this.buffer.push(event);
-
-    if (this.buffer.length >= BATCH_LIMIT) {
-      this.flush();
-    } else if (!this.timer) {
-      this.timer = setTimeout(() => this.flush(), FLUSH_INTERVAL);
-    }
-  }
-
-  /**
-   * Asynchronous flush using fetch (keepalive).
-   * Used during active sessions.
-   */
-  async flush() {
-    if (this.buffer.length === 0) return;
-
-    // Swap buffer immediately to prevent double-sending if await hangs
-    const payload = [...this.buffer];
-    this.buffer = [];
-    
-    if (this.timer) {
-      clearTimeout(this.timer);
-      this.timer = null;
-    }
-
-    try {
-      await fetch(ENDPOINT, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-            // In a real app, you'd inject the actual User ID from auth here.
-            // For now, we trust the backend to default to 'anonymous' if missing,
-            // or we can grab it from localStorage if available.
-            userId: localStorage.getItem('user_uid') || 'anonymous',
-            events: payload 
-        }),
-        keepalive: true // Critical: Keeps request alive even if component unmounts
-      });
-    } catch (err) {
-      // In a "dumb" collector, we log and move on. 
-      console.warn('[Telemetry] Flush failed:', err);
-    }
-  }
-
-  /**
-   * Synchronous-style flush using Beacon API.
-   * Critical for "Abandon" and "Unload" events where fetch might be cancelled.
-   */
-  flushSync() {
-    if (this.buffer.length === 0) return;
-    
-    const payload = JSON.stringify({ 
-        userId: localStorage.getItem('user_uid') || 'anonymous',
-        events: this.buffer 
+const postBatch = (events: InteractionEvent[]) => {
+  if (events.length === 0) return;
+  try {
+    void fetch(ENDPOINT, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+        // TODO: Add auth headers when server-side auth is available.
+      },
+      body: JSON.stringify({ events })
+      // TODO: Add retry/backoff strategy once telemetry SLA is defined.
+    }).catch(() => {
+      // Fail silently to avoid impacting UI.
     });
-    
-    const blob = new Blob([payload], { type: 'application/json' });
-    
-    // navigator.sendBeacon is designed specifically for this use case
-    const success = navigator.sendBeacon(ENDPOINT, blob);
-    
-    if (success) {
-      this.buffer = [];
-    } else {
-      console.warn('[Telemetry] Beacon failed to queue');
-    }
+  } catch {
+    // Fail silently to avoid impacting UI.
   }
+};
+
+const flush = () => {
+  if (queue.length === 0) return;
+  const payload = queue;
+  queue = [];
+  postBatch(payload);
+};
+
+const flushSync = () => {
+  if (queue.length === 0) return;
+  const payload = JSON.stringify({ events: queue });
+  const pending = queue;
+  queue = [];
+  try {
+    if (typeof navigator !== 'undefined' && typeof navigator.sendBeacon === 'function') {
+      const blob = new Blob([payload], { type: 'application/json' });
+      navigator.sendBeacon(ENDPOINT, blob);
+    } else {
+      postBatch(pending);
+    }
+  } catch {
+    // Fail silently to avoid impacting UI.
+  }
+};
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('beforeunload', () => flushSync());
 }
 
-export const telemetryTransport = new TelemetryTransportService();
+export function logEvent(event: InteractionEvent): void {
+  queue.push(event);
+  if (queue.length >= BATCH_LIMIT) {
+    flush();
+    return;
+  }
+  scheduleFlush();
+}

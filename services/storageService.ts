@@ -1,7 +1,7 @@
 import { db, auth } from "./firebaseConfig";
 import { 
-  collection, doc, getDoc, setDoc, deleteDoc, getDocs, 
-  writeBatch, query, where, addDoc 
+  collection, doc, getDoc, setDoc, deleteDoc, getDocs, getCountFromServer,
+  writeBatch, query, where, addDoc, limit
 } from "firebase/firestore";
 import { AppID } from "../types";
 
@@ -142,33 +142,32 @@ class StorageService {
   async clearStore(storeName: string): Promise<void> {
     if (!auth.currentUser) return;
     const col = this.getCollectionRef(storeName);
-    const snap = await getDocs(col);
-    
-    // Batch delete (limit 500 per batch in Firestore)
-    const batch = writeBatch(db);
-    snap.docs.forEach((doc) => {
-        batch.delete(doc.ref);
-    });
-    await batch.commit();
+
+    while (true) {
+        const snap = await getDocs(query(col, limit(500)));
+        if (snap.empty) return;
+
+        // Batch delete (limit 500 per batch in Firestore)
+        const batch = writeBatch(db);
+        snap.docs.forEach((doc) => {
+            batch.delete(doc.ref);
+        });
+        await batch.commit();
+    }
   }
 
   async getStoreStats(storeName: string): Promise<StoreStats> {
     if (!auth.currentUser) return { name: storeName, count: 0, sizeBytes: 0 };
     
-    // Firestore doesn't give size easily, so we estimate
-    // NOTE: In Production, replace getDocs with getCountFromServer() to save costs
+    // Aggregation queries avoid full collection scans for counts and reduce read costs.
     const col = this.getCollectionRef(storeName);
-    const snap = await getDocs(col); 
-    
-    let size = 0;
-    snap.docs.forEach(d => {
-        size += JSON.stringify(d.data()).length;
-    });
+    const countSnap = await getCountFromServer(col);
+    const count = countSnap.data().count;
 
     return {
         name: storeName,
-        count: snap.size,
-        sizeBytes: size
+        count,
+        sizeBytes: 0 // TODO: Replace with server-provided size metadata to avoid scans.
     };
   }
 

@@ -1,8 +1,8 @@
 import { signInWithPopup, signOut, onAuthStateChanged, User } from "firebase/auth";
 import { auth, googleProvider } from "./firebaseConfig";
 
-// The Master Key
-const ADMIN_EMAIL = "uylusjohnson@gmail.com";
+let cachedAdminClaim = false;
+let cachedAdminUid: string | null = null;
 
 export const authService = {
   login: async () => {
@@ -21,11 +21,29 @@ export const authService = {
   },
 
   isAdmin: (user: User | null) => {
-    return user?.email === ADMIN_EMAIL;
+    if (!user) return false;
+    return cachedAdminUid === user.uid && cachedAdminClaim;
   },
 
   // Hook listener
   onUserChange: (callback: (user: User | null) => void) => {
-    return onAuthStateChanged(auth, callback);
+    return onAuthStateChanged(auth, (user) => {
+      if (!user) {
+        cachedAdminClaim = false;
+        cachedAdminUid = null;
+        callback(user);
+        return;
+      }
+
+      cachedAdminUid = user.uid;
+      cachedAdminClaim = false;
+      void user.getIdTokenResult().then((result) => {
+        cachedAdminClaim = result.claims.admin === true;
+      }).catch(() => {
+        cachedAdminClaim = false;
+      });
+
+      callback(user);
+    });
   }
 };

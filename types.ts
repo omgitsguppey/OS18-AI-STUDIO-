@@ -76,6 +76,6 @@ export interface InteractionEvent {
   appId: string;
   action: 'open' | 'generate' | 'regenerate' | 'edit' | 'copy' | 'download' | 'dwell' | 'abandon' | 'success' | 'dislike' | 'completion' | 'error' | 'sys_event' | 'install_app' | 'open_app';
   timestamp: number;
-  metadata?: any;
+  metadata?: Record<string, unknown> | null;
   score?: number; // Optional on client, calculated on server
 }

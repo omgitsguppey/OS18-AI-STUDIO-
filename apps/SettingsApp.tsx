@@ -443,7 +443,7 @@ const BackendView = memo(({ recentEvents, sysMetrics, handleLobotomy }: any) => 
     </div>
 ));
 
-const IntelligenceView = memo(({ sysMetrics, aiLatency, testAiLatency, settings, updateSetting, testPrompt, setTestPrompt, testResponse, isTestingAi, handleTestPrompt }: any) => (
+const IntelligenceView = memo(({ sysMetrics, aiLatency, testAiLatency, settings, updateSetting, testPrompt, setTestPrompt, testResponse, isTestingAi, isCoolingDown, handleTestPrompt }: any) => (
     <div className="animate-slide-up pb-10 pt-4">
         <div className="px-4 mb-6">
             <div className="bg-gradient-to-br from-indigo-500 to-purple-600 rounded-2xl p-6 text-white shadow-lg">
@@ -464,8 +464,9 @@ const IntelligenceView = memo(({ sysMetrics, aiLatency, testAiLatency, settings,
             <div className="bg-white dark:bg-[#1C1C1E] p-4 rounded-xl border border-gray-200 dark:border-transparent">
                 <div className="flex gap-2 mb-3">
                     <input type="text" value={testPrompt} onChange={(e) => setTestPrompt(e.target.value)} placeholder="Ask Gemini something..." className="flex-1 bg-gray-100 dark:bg-black/50 border border-transparent focus:border-blue-500 rounded-lg px-3 py-2 text-sm outline-none transition-all" onKeyDown={(e) => e.key === 'Enter' && handleTestPrompt()} />
-                    <button onClick={handleTestPrompt} disabled={isTestingAi || !testPrompt.trim()} className="bg-blue-500 text-white p-2 rounded-lg disabled:opacity-50">{isTestingAi ? <Activity className="animate-spin" size={18} /> : <Play size={18} />}</button>
+                    <button onClick={handleTestPrompt} disabled={isTestingAi || isCoolingDown || !testPrompt.trim()} className="bg-blue-500 text-white p-2 rounded-lg disabled:opacity-50">{isTestingAi ? <Activity className="animate-spin" size={18} /> : <Play size={18} />}</button>
                 </div>
+                {isCoolingDown && <div className="mb-2 text-[11px] uppercase tracking-widest text-gray-400">Cooling Down</div>}
                 {testResponse && <div className="p-3 bg-gray-50 dark:bg-black/30 rounded-lg text-xs font-mono text-gray-700 dark:text-gray-300 whitespace-pre-wrap max-h-32 overflow-y-auto custom-scrollbar">{testResponse}</div>}
             </div>
         </div>
@@ -617,9 +618,11 @@ const SettingsApp: React.FC<SettingsAppProps> = ({
   const [testPrompt, setTestPrompt] = useState('');
   const [testResponse, setTestResponse] = useState('');
   const [isTestingAi, setIsTestingAi] = useState(false);
+  const [isCoolingDown, setIsCoolingDown] = useState(false);
 
   // Throttling for Logs
   const logUpdateRef = useRef<number>(0);
+  const testCooldownRef = useRef<number | null>(null);
 
   const currentView = viewStack[viewStack.length - 1];
 
@@ -704,6 +707,14 @@ const SettingsApp: React.FC<SettingsAppProps> = ({
     }
   }, [currentView]);
 
+  useEffect(() => {
+    return () => {
+      if (testCooldownRef.current) {
+        window.clearTimeout(testCooldownRef.current);
+      }
+    };
+  }, []);
+
   const pushView = useCallback((v: View) => setViewStack(prev => [...prev, v]), []);
   const popView = useCallback(() => setViewStack(prev => prev.slice(0, -1)), []);
 
@@ -734,6 +745,15 @@ const SettingsApp: React.FC<SettingsAppProps> = ({
 
   const handleTestPrompt = useCallback(async () => {
       if (!testPrompt.trim()) return;
+      if (isCoolingDown) return;
+      setIsCoolingDown(true);
+      if (testCooldownRef.current) {
+        window.clearTimeout(testCooldownRef.current);
+      }
+      testCooldownRef.current = window.setTimeout(() => {
+        setIsCoolingDown(false);
+        testCooldownRef.current = null;
+      }, 2000);
       setIsTestingAi(true);
       try {
           const response = await systemCore.getOptimizedPrompt(testPrompt, "test_console");
@@ -743,7 +763,7 @@ const SettingsApp: React.FC<SettingsAppProps> = ({
       } finally {
           setIsTestingAi(false);
       }
-  }, [testPrompt]);
+  }, [testPrompt, isCoolingDown]);
 
   const formatBytes = useCallback((bytes: number) => {
       if (bytes === 0) return '0 B';
@@ -807,7 +827,7 @@ const SettingsApp: React.FC<SettingsAppProps> = ({
         {currentView === 'main' && <MainView user={user} isAdmin={isAdmin} sysMetrics={sysMetrics} pushView={pushView} />}
         {currentView === 'profile' && <ProfileView user={user} isAdmin={isAdmin} sysMetrics={sysMetrics} handleSignOut={handleSignOut} formatBytes={formatBytes} />}
         {currentView === 'backend' && isAdmin && <BackendView recentEvents={recentEvents} sysMetrics={sysMetrics} handleLobotomy={handleLobotomy} />}
-        {currentView === 'gemini' && <IntelligenceView sysMetrics={sysMetrics} aiLatency={aiLatency} testAiLatency={testAiLatency} settings={settings} updateSetting={updateSetting} testPrompt={testPrompt} setTestPrompt={setTestPrompt} testResponse={testResponse} isTestingAi={isTestingAi} handleTestPrompt={handleTestPrompt} />}
+        {currentView === 'gemini' && <IntelligenceView sysMetrics={sysMetrics} aiLatency={aiLatency} testAiLatency={testAiLatency} settings={settings} updateSetting={updateSetting} testPrompt={testPrompt} setTestPrompt={setTestPrompt} testResponse={testResponse} isTestingAi={isTestingAi} isCoolingDown={isCoolingDown} handleTestPrompt={handleTestPrompt} />}
         {currentView === 'general' && <GeneralView pushView={pushView} />}
         {currentView === 'display' && <DisplayView settings={settings} updateSetting={updateSetting} />}
         {currentView === 'wallpaper' && <WallpaperView settings={settings} updateSetting={updateSetting} currentWallpaperId={currentWallpaperId} onWallpaperChange={onWallpaperChange} />}
