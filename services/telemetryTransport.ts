@@ -16,6 +16,7 @@ let queue: TelemetryEvent[] = [];
 let flushTimer: ReturnType<typeof setTimeout> | null = null;
 let isFlushing = false;
 let lastAuthToken: string | null = null;
+let tokenRequest: Promise<string | null> | null = null;
 
 const isNavigatorOnline = () =>
   typeof navigator === 'undefined' ? true : navigator.onLine !== false;
@@ -52,15 +53,21 @@ const scheduleFlush = () => {
 };
 
 const getAuthToken = async (): Promise<string | null> => {
+  if (lastAuthToken) return lastAuthToken;
+  if (tokenRequest) return tokenRequest;
   const user = auth.currentUser;
   if (!user) return null;
-  try {
-    const token = await user.getIdToken();
-    lastAuthToken = token;
-    return token;
-  } catch {
-    return lastAuthToken;
-  }
+  tokenRequest = user
+    .getIdToken()
+    .then((token) => {
+      lastAuthToken = token;
+      return token;
+    })
+    .catch(() => lastAuthToken)
+    .finally(() => {
+      tokenRequest = null;
+    });
+  return tokenRequest;
 };
 
 const sendBatch = async (payload: TelemetryPayload) => {
@@ -92,6 +99,13 @@ const flush = async () => {
   persistQueue();
 
   const token = await getAuthToken();
+  if (!token) {
+    queue = [...payloadEvents, ...queue];
+    persistQueue();
+    isFlushing = false;
+    scheduleFlush();
+    return;
+  }
   await sendBatch({ events: payloadEvents, token });
   isFlushing = false;
 
@@ -129,6 +143,18 @@ const flushSync = () => {
 
 if (typeof window !== 'undefined') {
   loadQueue();
+  auth.onIdTokenChanged((user) => {
+    if (!user) {
+      lastAuthToken = null;
+      return;
+    }
+    void user.getIdToken().then((token) => {
+      lastAuthToken = token;
+      if (queue.length > 0) {
+        void flush();
+      }
+    });
+  });
   window.addEventListener('beforeunload', flushSync);
   window.addEventListener('online', () => void flush());
 }
